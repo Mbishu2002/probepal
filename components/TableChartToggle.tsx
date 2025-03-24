@@ -35,12 +35,11 @@ interface ChartAxisStyle {
 }
 
 interface ChartOptions {
-  width: number | string;
-  height: number | string;
+  width: number;
+  height: number;
   title?: string;
   backgroundColor: string;
   fontSize?: number;
-  fontName?: string;
   lineWidth?: number;
   chartArea?: {
     width?: string;
@@ -104,11 +103,10 @@ const AVAILABLE_WIDTH = A4_WIDTH_PX - (2 * MARGIN_PX);
 const AVAILABLE_HEIGHT = Math.min(500, A4_HEIGHT_PX - (2 * MARGIN_PX));
 
 // Default chart options with all customizations
-const defaultChartOptions: ChartOptions = {
+const DEFAULT_CHART_OPTIONS: ChartOptions = {
   width: AVAILABLE_WIDTH,
   height: AVAILABLE_HEIGHT,
   fontSize: 11,
-  fontName: 'Times New Roman',
   backgroundColor: 'white',
   chartArea: {
     left: '15%',    // Increased left margin
@@ -124,7 +122,6 @@ const defaultChartOptions: ChartOptions = {
     alignment: 'center',
     textStyle: {
       fontSize: 11,
-      fontName: 'Times New Roman',
       color: '#333333',
       bold: false
     }
@@ -133,19 +130,16 @@ const defaultChartOptions: ChartOptions = {
     showColorCode: true,
     textStyle: {
       fontSize: 11,
-      fontName: 'Times New Roman',
       color: '#333333'
     }
   },
   hAxis: {
     textStyle: {
       fontSize: 11,
-      fontName: 'Times New Roman',
       color: '#333333'
     },
     titleTextStyle: {
       fontSize: 12,
-      fontName: 'Times New Roman',
       color: '#333333',
       bold: true
     },
@@ -160,12 +154,10 @@ const defaultChartOptions: ChartOptions = {
   vAxis: {
     textStyle: {
       fontSize: 11,
-      fontName: 'Times New Roman',
       color: '#333333'
     },
     titleTextStyle: {
       fontSize: 12,
-      fontName: 'Times New Roman',
       color: '#333333',
       bold: true
     },
@@ -201,7 +193,7 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
   const [selectedLabelColumn, setSelectedLabelColumn] = useState<string>('');
   const [selectedValueColumns, setSelectedValueColumns] = useState<string[]>([]);
   const [chartOptions, setChartOptions] = useState<ChartOptions>(
-    initialOptions || defaultChartOptions
+    initialOptions || DEFAULT_CHART_OPTIONS
   );
 
   // Initialize columns and selected columns
@@ -279,7 +271,7 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
 
   // Update chart options based on type
   const updateChartOptions = (type: ChartType) => {
-    const baseOptions = { ...defaultChartOptions };
+    const baseOptions = { ...DEFAULT_CHART_OPTIONS };
     
     // Common chart area settings for better centralization
     baseOptions.chartArea = {
@@ -292,8 +284,8 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
     };
 
     // Ensure we have a valid width and height
-    baseOptions.width = '100%';
-    baseOptions.height = 400;
+    baseOptions.width = AVAILABLE_WIDTH;
+    baseOptions.height = AVAILABLE_HEIGHT;
     
     switch (type) {
       case 'PieChart':
@@ -303,7 +295,7 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
         baseOptions.legend = {
           position: 'right',
           alignment: 'center',
-          textStyle: { fontSize: 11 }
+          textStyle: { fontSize: 11, color: '#333333' }
         };
         baseOptions.chartArea = {
           left: '5%',
@@ -321,7 +313,7 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
         baseOptions.legend = {
           position: 'top',
           alignment: 'center',
-          textStyle: { fontSize: 11 }
+          textStyle: { fontSize: 11, color: '#333333' }
         };
         baseOptions.hAxis = {
           ...baseOptions.hAxis,
@@ -330,7 +322,9 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
         };
         baseOptions.vAxis = {
           ...baseOptions.vAxis,
-          minValue: 0
+          viewWindow: {
+            min: 0
+          }
         };
         break;
         
@@ -346,7 +340,9 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
         };
         baseOptions.vAxis = {
           ...baseOptions.vAxis,
-          minValue: 0
+          viewWindow: {
+            min: 0
+          }
         };
         break;
         
@@ -376,7 +372,9 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
         };
         baseOptions.vAxis = {
           ...baseOptions.vAxis,
-          minValue: 0
+          viewWindow: {
+            min: 0
+          }
         };
         break;
     }
@@ -469,7 +467,14 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
             <Chart
               chartType={chartType}
               data={getChartData()}
-              options={chartOptions}
+              width={chartOptions.width}
+              height={chartOptions.height}
+              options={{
+                ...chartOptions,
+                // Remove width and height from options as they're passed as separate props
+                width: undefined,
+                height: undefined
+              }}
               loader={<div>Loading Chart...</div>}
             />
           </div>
