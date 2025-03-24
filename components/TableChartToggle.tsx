@@ -1,0 +1,484 @@
+'use client';
+
+import React, { useState, useEffect, useRef } from 'react';
+import { Chart } from 'react-google-charts';
+import { Button } from './ui/button';
+import { ChevronDown } from 'lucide-react';
+
+// Define available chart types
+type ChartType = 'ColumnChart' | 'BarChart' | 'LineChart' | 'AreaChart' | 'PieChart' | 'DonutChart' | 'ScatterChart' | 'ComboChart';
+
+interface ChartTextStyle {
+  fontSize?: number;
+  bold?: boolean;
+  color?: string;
+}
+
+interface GridlineOptions {
+  color?: string;
+  count?: number;
+}
+
+interface ChartAxisStyle {
+  title?: string;
+  titleTextStyle?: ChartTextStyle;
+  textStyle?: ChartTextStyle;
+  slantedText?: boolean;
+  slantedTextAngle?: number;
+  maxTextLines?: number;
+  gridlines?: GridlineOptions;
+  minorGridlines?: GridlineOptions;
+  viewWindow?: {
+    min?: number;
+    max?: number;
+  };
+}
+
+interface ChartOptions {
+  width: number | string;
+  height: number | string;
+  title?: string;
+  backgroundColor: string;
+  fontSize?: number;
+  fontName?: string;
+  lineWidth?: number;
+  chartArea?: {
+    width?: string;
+    height?: string;
+    left?: string;
+    right?: string;
+    top?: string;
+    bottom?: string;
+  };
+  animation?: {
+    startup?: boolean;
+    duration?: number;
+    easing?: string;
+  };
+  legend?: {
+    position?: 'top' | 'bottom' | 'left' | 'right' | 'none';
+    alignment?: 'start' | 'center' | 'end';
+    textStyle?: ChartTextStyle;
+  };
+  tooltip?: {
+    showColorCode?: boolean;
+    textStyle?: ChartTextStyle;
+    trigger?: 'none' | 'focus' | 'selection';
+    isHtml?: boolean;
+  };
+  hAxis?: ChartAxisStyle;
+  vAxis?: ChartAxisStyle;
+  curveType?: 'none' | 'function';
+  pointSize?: number;
+  isStacked?: boolean;
+  areaOpacity?: number;
+  pieHole?: number;
+  pieSliceText?: 'percentage' | 'value' | 'label';
+  seriesType?: string;
+  series?: Record<number, { type?: string }>;
+  trendlines?: Record<number, object>;
+  sliceVisibilityThreshold?: number;
+  colors?: string[];
+  bar?: {
+    groupWidth?: string | number;
+  };
+}
+
+interface TableData {
+  [key: string]: string;
+}
+
+interface TableChartToggleProps {
+  tableHtml: string;
+  tableData: Array<Record<string, any>>;
+  initialOptions?: ChartOptions;
+}
+
+// A4 dimensions in pixels at 96 DPI
+const A4_WIDTH_PX = 794;
+const A4_HEIGHT_PX = 1123;
+const MARGIN_PX = 40;
+
+// Calculate available space for chart
+const AVAILABLE_WIDTH = A4_WIDTH_PX - (2 * MARGIN_PX);
+const AVAILABLE_HEIGHT = Math.min(500, A4_HEIGHT_PX - (2 * MARGIN_PX));
+
+// Default chart options with all customizations
+const defaultChartOptions: ChartOptions = {
+  width: AVAILABLE_WIDTH,
+  height: AVAILABLE_HEIGHT,
+  fontSize: 11,
+  fontName: 'Times New Roman',
+  backgroundColor: 'white',
+  chartArea: {
+    left: '15%',    // Increased left margin
+    top: '15%',     // Increased top margin
+    right: '5%',
+    bottom: '15%',  // Increased bottom margin
+    width: '80%',   // Adjusted width to account for margins
+    height: '70%'   // Adjusted height to account for margins
+  },
+  colors: ['#4285F4', '#DB4437', '#F4B400', '#0F9D58', '#AB47BC', '#00ACC1', '#FF7043', '#9E9E9E'],
+  legend: {
+    position: 'bottom',
+    alignment: 'center',
+    textStyle: {
+      fontSize: 11,
+      fontName: 'Times New Roman',
+      color: '#333333',
+      bold: false
+    }
+  },
+  tooltip: {
+    showColorCode: true,
+    textStyle: {
+      fontSize: 11,
+      fontName: 'Times New Roman',
+      color: '#333333'
+    }
+  },
+  hAxis: {
+    textStyle: {
+      fontSize: 11,
+      fontName: 'Times New Roman',
+      color: '#333333'
+    },
+    titleTextStyle: {
+      fontSize: 12,
+      fontName: 'Times New Roman',
+      color: '#333333',
+      bold: true
+    },
+    gridlines: {
+      count: 5,
+      color: '#E0E0E0'
+    },
+    minorGridlines: {
+      count: 0
+    }
+  },
+  vAxis: {
+    textStyle: {
+      fontSize: 11,
+      fontName: 'Times New Roman',
+      color: '#333333'
+    },
+    titleTextStyle: {
+      fontSize: 12,
+      fontName: 'Times New Roman',
+      color: '#333333',
+      bold: true
+    },
+    gridlines: {
+      count: 5,
+      color: '#E0E0E0'
+    },
+    minorGridlines: {
+      count: 0
+    }
+  }
+};
+
+// Chart type options
+const chartTypeOptions = [
+  { value: 'LineChart', label: 'Line Chart', icon: 'line' },
+  { value: 'AreaChart', label: 'Area Chart', icon: 'area' },
+  { value: 'BarChart', label: 'Bar Chart', icon: 'bar' },
+  { value: 'ColumnChart', label: 'Column Chart', icon: 'column' },
+  { value: 'PieChart', label: 'Pie Chart', icon: 'pie' },
+  { value: 'DonutChart', label: 'Donut Chart', icon: 'donut' },
+  { value: 'ScatterChart', label: 'Scatter Chart', icon: 'scatter' },
+  { value: 'ComboChart', label: 'Combo Chart', icon: 'combo' }
+];
+
+const TableChartToggle: React.FC<TableChartToggleProps> = ({ 
+  tableHtml, 
+  tableData,
+  initialOptions 
+}) => {
+  const [showChart, setShowChart] = useState(false);
+  const [chartType, setChartType] = useState<ChartType>('ColumnChart');
+  const [selectedLabelColumn, setSelectedLabelColumn] = useState<string>('');
+  const [selectedValueColumns, setSelectedValueColumns] = useState<string[]>([]);
+  const [chartOptions, setChartOptions] = useState<ChartOptions>(
+    initialOptions || defaultChartOptions
+  );
+
+  // Initialize columns and selected columns
+  useEffect(() => {
+    if (tableData && tableData.length > 0) {
+      const cols = Object.keys(tableData[0]);
+      setSelectedLabelColumn(prev => prev || cols[0]);
+      setSelectedValueColumns(prev => prev.length === 0 && cols.length > 1 ? [cols[1]] : prev);
+    }
+  }, [tableData]);
+
+  // Update chart options whenever chart type or columns change
+  useEffect(() => {
+    if (chartType) {
+      updateChartOptions(chartType);
+    }
+  }, [chartType, selectedLabelColumn, selectedValueColumns]);
+
+  // Get data for the chart
+  const getChartData = () => {
+    if (!tableData || !selectedLabelColumn || selectedValueColumns.length === 0) {
+      return [['Label', 'Value'], ['No Data', 0]];
+    }
+
+    try {
+      // Ensure all values are properly formatted
+      const formatValue = (value: any) => {
+        if (value === null || value === undefined) return 0;
+        const num = Number(value);
+        return isNaN(num) ? 0 : num;
+      };
+
+      // For pie and donut charts, we can only use one value column
+      if (chartType === 'PieChart' || chartType === 'DonutChart') {
+        const valueColumn = selectedValueColumns[0];
+        if (!valueColumn) return [['Label', 'Value'], ['No Data', 0]];
+        
+        return [
+          ['Label', 'Value'],
+          ...tableData.map(row => [
+            String(row[selectedLabelColumn] || ''),
+            formatValue(row[valueColumn])
+          ])
+        ];
+      }
+
+      // For scatter charts, we need exactly two numeric columns
+      if (chartType === 'ScatterChart') {
+        if (selectedValueColumns.length < 2) {
+          return [['X', 'Y'], [0, 0]];
+        }
+        return [
+          [selectedValueColumns[0], selectedValueColumns[1]],
+          ...tableData.map(row => [
+            formatValue(row[selectedValueColumns[0]]),
+            formatValue(row[selectedValueColumns[1]])
+          ])
+        ];
+      }
+
+      // For other chart types (ColumnChart, BarChart, LineChart, AreaChart, ComboChart)
+      const headers = [selectedLabelColumn, ...selectedValueColumns];
+      const rows = tableData.map(row => [
+        String(row[selectedLabelColumn] || ''),
+        ...selectedValueColumns.map(col => formatValue(row[col]))
+      ]);
+
+      // Ensure data is properly structured for Google Charts
+      return [headers, ...rows];
+    } catch (error) {
+      console.error('Error processing chart data:', error);
+      return [['Label', 'Value'], ['Error', 0]];
+    }
+  };
+
+  // Update chart options based on type
+  const updateChartOptions = (type: ChartType) => {
+    const baseOptions = { ...defaultChartOptions };
+    
+    // Common chart area settings for better centralization
+    baseOptions.chartArea = {
+      left: '10%',
+      right: '5%',
+      top: '10%',
+      bottom: '15%',
+      width: '85%',
+      height: '75%'
+    };
+
+    // Ensure we have a valid width and height
+    baseOptions.width = '100%';
+    baseOptions.height = 400;
+    
+    switch (type) {
+      case 'PieChart':
+      case 'DonutChart':
+        baseOptions.pieSliceText = 'percentage';
+        baseOptions.pieHole = type === 'DonutChart' ? 0.4 : 0;
+        baseOptions.legend = {
+          position: 'right',
+          alignment: 'center',
+          textStyle: { fontSize: 11 }
+        };
+        baseOptions.chartArea = {
+          left: '5%',
+          right: '20%',
+          top: '5%',
+          bottom: '5%',
+          width: '75%',
+          height: '90%'
+        };
+        break;
+        
+      case 'BarChart':
+      case 'ColumnChart':
+        baseOptions.bar = { groupWidth: '70%' };
+        baseOptions.legend = {
+          position: 'top',
+          alignment: 'center',
+          textStyle: { fontSize: 11 }
+        };
+        baseOptions.hAxis = {
+          ...baseOptions.hAxis,
+          slantedText: type === 'ColumnChart',
+          slantedTextAngle: type === 'ColumnChart' ? 45 : 0
+        };
+        baseOptions.vAxis = {
+          ...baseOptions.vAxis,
+          minValue: 0
+        };
+        break;
+        
+      case 'LineChart':
+      case 'AreaChart':
+        baseOptions.curveType = 'function';
+        baseOptions.pointSize = 4;
+        baseOptions.lineWidth = 2;
+        baseOptions.areaOpacity = type === 'AreaChart' ? 0.2 : undefined;
+        baseOptions.legend = {
+          position: 'top',
+          alignment: 'center'
+        };
+        baseOptions.vAxis = {
+          ...baseOptions.vAxis,
+          minValue: 0
+        };
+        break;
+        
+      case 'ScatterChart':
+        baseOptions.pointSize = 6;
+        baseOptions.legend = { position: 'none' };
+        baseOptions.hAxis = {
+          ...baseOptions.hAxis,
+          title: selectedValueColumns[0],
+          viewWindow: { min: 0 }
+        };
+        baseOptions.vAxis = {
+          ...baseOptions.vAxis,
+          title: selectedValueColumns[1],
+          viewWindow: { min: 0 }
+        };
+        break;
+        
+      case 'ComboChart':
+        baseOptions.seriesType = 'bars';
+        baseOptions.series = {
+          1: { type: 'line' }
+        };
+        baseOptions.legend = {
+          position: 'top',
+          alignment: 'center'
+        };
+        baseOptions.vAxis = {
+          ...baseOptions.vAxis,
+          minValue: 0
+        };
+        break;
+    }
+    
+    setChartOptions(baseOptions);
+  };
+
+  // Handle chart type change
+  const handleChartTypeChange = (newType: ChartType) => {
+    setChartType(newType);
+  };
+
+  // Handle value column selection
+  const handleValueColumnChange = (column: string, checked: boolean) => {
+    if (checked) {
+      setSelectedValueColumns(prev => [...prev, column]);
+    } else {
+      setSelectedValueColumns(prev => prev.filter(col => col !== column));
+    }
+  };
+
+  return (
+    <div className="my-4 border rounded-lg overflow-hidden">
+      <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
+        <div className="flex items-center space-x-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowChart(!showChart)}
+            className="text-xs"
+          >
+            {showChart ? 'Show Table' : 'Show Chart'}
+          </Button>
+          
+          {showChart && (
+            <>
+              <select
+                value={chartType}
+                onChange={(e) => handleChartTypeChange(e.target.value as ChartType)}
+                className="text-xs border rounded px-2 py-1"
+              >
+                {chartTypeOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium mb-1">Label Column:</label>
+                <select
+                  value={selectedLabelColumn}
+                  onChange={(e) => setSelectedLabelColumn(e.target.value)}
+                  className="text-xs border rounded px-2 py-1"
+                >
+                  {tableData && tableData.length > 0 && 
+                    Object.keys(tableData[0]).map(col => (
+                      <option key={col} value={col}>{col}</option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium mb-1">Value Columns:</label>
+                <div className="flex flex-col space-y-1 max-h-32 overflow-y-auto border rounded p-2 bg-white">
+                  {tableData && tableData.length > 0 && 
+                    Object.keys(tableData[0])
+                      .filter(col => col !== selectedLabelColumn)
+                      .map(col => (
+                        <label key={col} className="flex items-center text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selectedValueColumns.includes(col)}
+                            onChange={(e) => handleValueColumnChange(col, e.target.checked)}
+                            className="mr-1"
+                          />
+                          {col}
+                        </label>
+                      ))
+                  }
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      
+      <div className="p-4">
+        {showChart ? (
+          <div className="flex justify-center items-center" style={{ minHeight: '400px', width: '100%' }}>
+            <Chart
+              chartType={chartType}
+              data={getChartData()}
+              options={chartOptions}
+              loader={<div>Loading Chart...</div>}
+            />
+          </div>
+        ) : (
+          <div dangerouslySetInnerHTML={{ __html: tableHtml }} />
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default TableChartToggle;
