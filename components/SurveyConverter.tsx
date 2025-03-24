@@ -3,9 +3,7 @@ import { Button } from './ui/button';
 import { Upload, FileText, Database, Eye, Download, Wand2, ChevronLeft, BarChart } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
-import { saveAs } from 'file-saver';
-import { v4 as uuidv4 } from 'uuid';
-import api from '../lib/api';
+import axios from 'axios';
 import { Alert, AlertDescription } from "./ui/alert"
 import { Progress } from "./ui/progress"
 
@@ -78,7 +76,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
       setProcessingStatus('Analyzing document structure...');
 
       // Use AI to analyze the document structure
-      const response = await api.post('/api/analyze-survey', {
+      const response = await axios.post('/api/analyze-survey', {
         documentText: text,
         systemPrompt: `You are an expert at analyzing survey documents. Your task is to:
         1. Extract the survey questions exactly as they appear in the document without changing their structure or wording
@@ -175,7 +173,45 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
   // Handle form submission
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setResponses([...responses, currentResponse]);
+    
+    // Process the current response to include any write-in text
+    const processedResponse = { ...currentResponse };
+    
+    // For each question, check if there are any write-in fields
+    questions.forEach(question => {
+      if (question.options) {
+        question.options.forEach(option => {
+          const needsTextInput = option.endsWith('___') || 
+                               option.toLowerCase().includes('specify') ||
+                               option.toLowerCase().includes('other');
+          
+          if (needsTextInput) {
+            const writeInKey = `${question.id}_${option}`;
+            const writeInValue = currentResponse[writeInKey];
+            
+            // If this option is selected and has a write-in value
+            if (question.type === 'radio' && currentResponse[question.id] === option && writeInValue) {
+              // Replace the option with the option + write-in value
+              processedResponse[question.id] = `${option}: ${writeInValue}`;
+            } else if (question.type === 'checkbox') {
+              const selectedOptions = (currentResponse[question.id] as string[]) || [];
+              
+              if (selectedOptions.includes(option) && writeInValue) {
+                // For checkboxes, we need to modify the array
+                const optionIndex = selectedOptions.indexOf(option);
+                if (optionIndex !== -1) {
+                  const newSelectedOptions = [...selectedOptions];
+                  newSelectedOptions[optionIndex] = `${option}: ${writeInValue}`;
+                  processedResponse[question.id] = newSelectedOptions;
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+    
+    setResponses([...responses, processedResponse]);
     setCurrentResponse({});
   };
 
@@ -183,202 +219,303 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     
-    // Create worksheet from responses (raw data)
-    const rawDataWs = XLSX.utils.json_to_sheet(responses);
-    
-    // Add raw data worksheet to workbook
-    XLSX.utils.book_append_sheet(wb, rawDataWs, 'Raw Responses');
-    
-    // Create a properly formatted table for each question
-    sections.forEach((sectionName, sectionIndex) => {
-      // Create a new worksheet for each section
-      const sectionData: any[] = [];
-      
-      // Add section title
-      sectionData.push([`Section: ${sectionName}`]);
-      sectionData.push([]);  // Empty row
-      
-      // Process each question in this section
-      const sectionQuestions = questions.filter(q => q.section === sectionName);
-      
-      sectionQuestions.forEach((question, qIndex) => {
-        // Add question text
-        sectionData.push([`Question: ${question.text}`]);
+    // Create a worksheet for raw responses
+    const rawResponsesWs = XLSX.utils.json_to_sheet(
+      responses.map((response, idx) => {
+        const flatResponse: Record<string, string> = { ResponseID: `Response_${idx + 1}` };
         
-        // Add table headers
-        sectionData.push(['Answer', 'Frequency', 'Percentage']);
-        
-        if (question.type === 'radio' || question.type === 'select' || question.type === 'checkbox') {
-          const questionCounts: {[key: string]: number} = {};
-          let totalResponses = 0;
+        // Process each question
+        questions.forEach(question => {
+          const answer = response[question.id];
           
-          // Initialize counts for all options
-          if (question.options) {
-            question.options.forEach(option => {
-              questionCounts[option] = 0;
-            });
+          // Handle different question types
+          if (Array.isArray(answer)) {
+            flatResponse[question.text] = answer.join(', ');
+          } else if (answer !== undefined && answer !== null) {
+            flatResponse[question.text] = String(answer);
+          } else {
+            flatResponse[question.text] = '';
           }
           
-          // Count responses
-          responses.forEach(response => {
-            const answer = response[question.id];
+          // Include any write-in responses
+          if (question.options) {
+            question.options.forEach(option => {
+              const needsTextInput = option.endsWith('___') || 
+                                   option.toLowerCase().includes('specify') ||
+                                   option.toLowerCase().includes('other');
+              
+              if (needsTextInput) {
+                const writeInKey = `${question.id}_${option}`;
+                const writeInValue = response[writeInKey];
+                
+                if (writeInValue) {
+                  flatResponse[`${question.text} (${option})`] = String(writeInValue);
+                }
+              }
+            });
+          }
+        });
+        
+        return flatResponse;
+      })
+    );
+    
+    XLSX.utils.book_append_sheet(wb, rawResponsesWs, 'Raw Responses');
+    
+    // Create a worksheet for each section
+    const sectionWorksheets: Record<string, XLSX.WorkSheet> = {};
+    
+    sections.forEach(section => {
+      const sectionQuestions = questions.filter(q => q.section === section);
+      
+      // Skip if no questions in this section
+      if (sectionQuestions.length === 0) return;
+      
+      const sectionData: any[] = [];
+      
+      sectionQuestions.forEach(question => {
+        // Get all possible options for this question
+        let allOptions: string[] = [];
+        
+        if (question.options) {
+          allOptions = [...question.options];
+          
+          // Add write-in responses as separate options
+          question.options.forEach(option => {
+            const needsTextInput = option.endsWith('___') || 
+                                 option.toLowerCase().includes('specify') ||
+                                 option.toLowerCase().includes('other');
             
-            if (Array.isArray(answer) && answer.length > 0) {
-              // Handle checkbox (multiple answers)
-              answer.forEach(option => {
-                questionCounts[option] = (questionCounts[option] || 0) + 1;
-                totalResponses++;
+            if (needsTextInput) {
+              responses.forEach(response => {
+                const writeInKey = `${question.id}_${option}`;
+                const writeInValue = response[writeInKey];
+                
+                if (writeInValue && typeof writeInValue === 'string') {
+                  const fullOption = `${option}: ${writeInValue}`;
+                  if (!allOptions.includes(fullOption)) {
+                    allOptions.push(fullOption);
+                  }
+                }
               });
-            } else if (answer) {
-              // Handle radio/select (single answer)
-              questionCounts[answer as string] = (questionCounts[answer as string] || 0) + 1;
-              totalResponses++;
             }
           });
-          
-          // Add rows for each option with counts and percentages
-          Object.entries(questionCounts).forEach(([option, count]) => {
-            const percentage = totalResponses > 0 
-              ? Math.round((count / totalResponses) * 100) 
-              : 0;
-            
-            sectionData.push([option, count, `${percentage}%`]);
-          });
-          
-          // Add total row
-          sectionData.push(['Total', totalResponses, '100%']);
-        } else {
-          // For text/number questions
-          let textResponseCount = 0;
-          responses.forEach(response => {
-            if (response[question.id]) {
-              textResponseCount++;
-            }
-          });
-          
-          sectionData.push(['(Free text responses)', textResponseCount, '100%']);
         }
         
-        // Add empty row for spacing between questions
-        sectionData.push([]);
-        sectionData.push([]);
+        // Count frequencies
+        const questionCounts: Record<string, number> = {};
+        let totalResponses = 0;
+        
+        responses.forEach(response => {
+          const answer = response[question.id];
+          
+          if (Array.isArray(answer)) {
+            // Handle checkbox (multiple answers)
+            answer.forEach(option => {
+              questionCounts[option] = (questionCounts[option] || 0) + 1;
+              totalResponses++;
+            });
+          } else if (answer !== undefined && answer !== null && answer !== '') {
+            // Handle radio/select/text/number (single answer)
+            questionCounts[String(answer)] = (questionCounts[String(answer)] || 0) + 1;
+            totalResponses++;
+          }
+          
+          // Include write-in responses in the counts
+          if (question.options) {
+            question.options.forEach(option => {
+              const needsTextInput = option.endsWith('___') || 
+                                   option.toLowerCase().includes('specify') ||
+                                   option.toLowerCase().includes('other');
+              
+              if (needsTextInput) {
+                const writeInKey = `${question.id}_${option}`;
+                const writeInValue = response[writeInKey];
+                
+                if (writeInValue) {
+                  const fullOption = `${option}: ${writeInValue}`;
+                  // Only count if not already counted in the main answer
+                  if (!answer || (Array.isArray(answer) && !answer.includes(fullOption)) || 
+                      (!Array.isArray(answer) && answer !== fullOption)) {
+                    questionCounts[fullOption] = (questionCounts[fullOption] || 0) + 1;
+                    // Don't increment totalResponses as this is part of an existing response
+                  }
+                }
+              }
+            });
+          }
+        });
+        
+        // Calculate percentages and create data rows
+        if (totalResponses > 0) {
+          // For questions with predefined options
+          if (allOptions.length > 0) {
+            allOptions.forEach(option => {
+              const count = questionCounts[option] || 0;
+              const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
+              
+              sectionData.push({
+                'Question': question.text,
+                'Answer': option,
+                'Count': count,
+                'Percentage': percentage.toFixed(2) + '%'
+              });
+            });
+          } else {
+            // For free text questions, list each unique answer
+            Object.keys(questionCounts).forEach(answer => {
+              const count = questionCounts[answer];
+              const percentage = (count / totalResponses) * 100;
+              
+              sectionData.push({
+                'Question': question.text,
+                'Answer': answer,
+                'Count': count,
+                'Percentage': percentage.toFixed(2) + '%'
+              });
+            });
+          }
+        } else {
+          // No responses for this question
+          sectionData.push({
+            'Question': question.text,
+            'Answer': 'No responses',
+            'Count': 0,
+            'Percentage': '0.00%'
+          });
+        }
       });
       
       // Create worksheet for this section
-      const sectionWs = XLSX.utils.aoa_to_sheet(sectionData);
-      
-      // Set column widths for better readability
-      const columnWidths = [
-        { wch: 40 }, // Answer
-        { wch: 15 }, // Frequency
-        { wch: 15 }  // Percentage
-      ];
-      sectionWs['!cols'] = columnWidths;
-      
-      // Add section worksheet to workbook
-      XLSX.utils.book_append_sheet(wb, sectionWs, sectionName.substring(0, 30)); // Excel has a 31 char limit for sheet names
+      if (sectionData.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(sectionData);
+        sectionWorksheets[section] = ws;
+        XLSX.utils.book_append_sheet(wb, ws, section.substring(0, 31)); // Excel sheet names limited to 31 chars
+      }
     });
     
-    // Create a summary worksheet with all questions
+    // Create a summary worksheet
     const summaryData: any[] = [];
     
-    // Add title
-    summaryData.push(['Survey Summary']);
-    summaryData.push([]);
-    
-    // Add header row
-    summaryData.push(['Section', 'Question', 'Answer', 'Count', 'Percentage']);
-    
-    // Process all sections and questions
-    sections.forEach(sectionName => {
-      const sectionQuestions = questions.filter(q => q.section === sectionName);
+    questions.forEach(question => {
+      // Get all possible options for this question
+      let allOptions: string[] = [];
       
-      sectionQuestions.forEach(question => {
-        let totalResponsesForQuestion = 0;
-        const questionCounts: {[key: string]: number} = {};
+      if (question.options) {
+        allOptions = [...question.options];
         
-        if (question.type === 'radio' || question.type === 'select' || question.type === 'checkbox') {
-          // Initialize counts for all options
-          if (question.options) {
-            question.options.forEach(option => {
-              questionCounts[option] = 0;
+        // Add write-in responses as separate options
+        question.options.forEach(option => {
+          const needsTextInput = option.endsWith('___') || 
+                               option.toLowerCase().includes('specify') ||
+                               option.toLowerCase().includes('other');
+          
+          if (needsTextInput) {
+            responses.forEach(response => {
+              const writeInKey = `${question.id}_${option}`;
+              const writeInValue = response[writeInKey];
+              
+              if (writeInValue && typeof writeInValue === 'string') {
+                const fullOption = `${option}: ${writeInValue}`;
+                if (!allOptions.includes(fullOption)) {
+                  allOptions.push(fullOption);
+                }
+              }
             });
           }
-          
-          // Count responses
-          responses.forEach(response => {
-            const answer = response[question.id];
+        });
+      }
+      
+      // Count frequencies
+      const questionCounts: Record<string, number> = {};
+      let totalResponses = 0;
+      
+      responses.forEach(response => {
+        const answer = response[question.id];
+        
+        if (Array.isArray(answer)) {
+          // Handle checkbox (multiple answers)
+          answer.forEach(option => {
+            questionCounts[option] = (questionCounts[option] || 0) + 1;
+            totalResponses++;
+          });
+        } else if (answer !== undefined && answer !== null && answer !== '') {
+          // Handle radio/select/text/number (single answer)
+          questionCounts[String(answer)] = (questionCounts[String(answer)] || 0) + 1;
+          totalResponses++;
+        }
+        
+        // Include write-in responses in the counts
+        if (question.options) {
+          question.options.forEach(option => {
+            const needsTextInput = option.endsWith('___') || 
+                                 option.toLowerCase().includes('specify') ||
+                                 option.toLowerCase().includes('other');
             
-            if (Array.isArray(answer)) {
-              // Handle checkbox (multiple answers)
-              answer.forEach(option => {
-                questionCounts[option] = (questionCounts[option] || 0) + 1;
-                totalResponsesForQuestion++;
-              });
-            } else if (answer) {
-              // Handle radio/select (single answer)
-              questionCounts[answer as string] = (questionCounts[answer as string] || 0) + 1;
-              totalResponsesForQuestion++;
+            if (needsTextInput) {
+              const writeInKey = `${question.id}_${option}`;
+              const writeInValue = response[writeInKey];
+              
+              if (writeInValue) {
+                const fullOption = `${option}: ${writeInValue}`;
+                // Only count if not already counted in the main answer
+                if (!answer || (Array.isArray(answer) && !answer.includes(fullOption)) || 
+                    (!Array.isArray(answer) && answer !== fullOption)) {
+                  questionCounts[fullOption] = (questionCounts[fullOption] || 0) + 1;
+                  // Don't increment totalResponses as this is part of an existing response
+                }
+              }
             }
           });
-          
-          // Add rows for each option with counts and percentages
-          Object.entries(questionCounts).forEach(([option, count], index) => {
-            const percentage = totalResponsesForQuestion > 0 
-              ? Math.round((count / totalResponsesForQuestion) * 100) 
-              : 0;
-            
-            summaryData.push([
-              index === 0 ? sectionName : '',
-              index === 0 ? question.text : '',
-              option,
-              count,
-              `${percentage}%`
-            ]);
-          });
-          
-          // Add empty row for spacing
-          summaryData.push([]);
-        } else {
-          // For text/number questions
-          let textResponseCount = 0;
-          responses.forEach(response => {
-            if (response[question.id]) {
-              textResponseCount++;
-            }
-          });
-          
-          summaryData.push([
-            sectionName,
-            question.text,
-            '(Free text responses)',
-            textResponseCount,
-            textResponseCount > 0 ? '100%' : '0%'
-          ]);
-          
-          // Add empty row for spacing
-          summaryData.push([]);
         }
       });
+      
+      // Calculate percentages and create data rows
+      if (totalResponses > 0) {
+        // For questions with predefined options
+        if (allOptions.length > 0) {
+          allOptions.forEach(option => {
+            const count = questionCounts[option] || 0;
+            const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
+            
+            summaryData.push({
+              'Section': question.section,
+              'Question': question.text,
+              'Answer': option,
+              'Count': count,
+              'Percentage': percentage.toFixed(2) + '%'
+            });
+          });
+        } else {
+          // For free text questions, list each unique answer
+          Object.keys(questionCounts).forEach(answer => {
+            const count = questionCounts[answer];
+            const percentage = (count / totalResponses) * 100;
+            
+            summaryData.push({
+              'Section': question.section,
+              'Question': question.text,
+              'Answer': answer,
+              'Count': count,
+              'Percentage': percentage.toFixed(2) + '%'
+            });
+          });
+        }
+      } else {
+        // No responses for this question
+        summaryData.push({
+          'Section': question.section,
+          'Question': question.text,
+          'Answer': 'No responses',
+          'Count': 0,
+          'Percentage': '0.00%'
+        });
+      }
     });
     
-    // Create summary worksheet
-    const summaryWs = XLSX.utils.aoa_to_sheet(summaryData);
-    
-    // Set column widths for better readability
-    const summaryColumnWidths = [
-      { wch: 20 }, // Section
-      { wch: 40 }, // Question
-      { wch: 30 }, // Answer
-      { wch: 15 }, // Count
-      { wch: 15 }  // Percentage
-    ];
-    summaryWs['!cols'] = summaryColumnWidths;
-    
-    // Add summary worksheet to workbook
+    const summaryWs = XLSX.utils.json_to_sheet(summaryData);
     XLSX.utils.book_append_sheet(wb, summaryWs, 'Survey Summary');
     
-    // Save workbook
     XLSX.writeFile(wb, 'survey_responses.xlsx');
   };
 
@@ -404,7 +541,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
         responses.forEach(response => {
           const answer = response[question.id];
           
-          if (Array.isArray(answer) && answer.length > 0) {
+          if (Array.isArray(answer)) {
             // Handle checkbox (multiple answers)
             answer.forEach(option => {
               questionCounts[option] = (questionCounts[option] || 0) + 1;
@@ -412,6 +549,25 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
           } else if (answer) {
             // Handle radio/select (single answer)
             questionCounts[answer as string] = (questionCounts[answer as string] || 0) + 1;
+          }
+          
+          // Include write-in responses in the counts
+          if (question.options) {
+            question.options.forEach(option => {
+              const needsTextInput = option.endsWith('___') || 
+                                   option.toLowerCase().includes('specify') ||
+                                   option.toLowerCase().includes('other');
+              
+              if (needsTextInput) {
+                const writeInKey = `${question.id}_${option}`;
+                const writeInValue = response[writeInKey];
+                
+                if (writeInValue) {
+                  const fullOption = `${option}: ${writeInValue}`;
+                  questionCounts[fullOption] = (questionCounts[fullOption] || 0) + 1;
+                }
+              }
+            });
           }
         });
         
@@ -437,43 +593,19 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
     await processWordDocument(new File([rawDocumentText], 'document.txt', { type: 'text/plain' }));
   };
 
-  // Handle response change for text, number, radio, and select inputs
-  const handleResponseChange = (questionId: string, value: string | number) => {
-    setCurrentResponse({
-      ...currentResponse,
-      [questionId]: value
-    });
-  };
-  
-  // Handle checkbox change
-  const handleCheckboxChange = (questionId: string, option: string, checked: boolean) => {
-    const currentValues = Array.isArray(currentResponse[questionId]) 
-      ? currentResponse[questionId] as string[]
-      : [];
-    
-    const newValues = checked
-      ? [...currentValues, option]
-      : currentValues.filter(v => v !== option);
-    
-    setCurrentResponse({
-      ...currentResponse,
-      [questionId]: newValues
-    });
-  };
-
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
       <div className="p-4 border-b border-gray-200">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
-          <div className="flex items-center mb-3 sm:mb-0">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
+          <div className="flex items-center">
             <h2 className="text-lg font-medium">Survey Converter</h2>
             {currentFileName && (
-              <span className="ml-2 text-sm text-gray-500 truncate max-w-[150px] sm:max-w-xs">
+              <span className="ml-2 text-sm text-gray-500 truncate max-w-[200px]">
                 - {currentFileName}
               </span>
             )}
           </div>
-          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -482,7 +614,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
               disabled={isProcessing}
             >
               <Upload className="h-4 w-4 mr-2" />
-              <span className="whitespace-nowrap">Upload Survey</span>
+              Upload Survey
             </Button>
             {questions.length > 0 && (
               <Button
@@ -493,7 +625,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
                 disabled={isProcessing}
               >
                 <Wand2 className="h-4 w-4 mr-2" />
-                <span className="whitespace-nowrap">Regenerate</span>
+                Regenerate
               </Button>
             )}
             {responses.length > 0 && (
@@ -520,7 +652,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
                   className="flex items-center"
                 >
                   <BarChart className="h-4 w-4 mr-2" />
-                  <span className="whitespace-nowrap">Frequency</span>
+                  Frequency Counts
                 </Button>
                 <Button
                   variant="outline"
@@ -529,7 +661,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
                   className="flex items-center"
                 >
                   <Download className="h-4 w-4 mr-2" />
-                  <span className="whitespace-nowrap">Export</span>
+                  Export Excel
                 </Button>
               </>
             )}
@@ -537,152 +669,309 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
         </div>
       </div>
 
-      {/* File input (hidden) */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileUpload}
+        accept=".docx"
         className="hidden"
-        accept=".docx,.doc,.txt"
       />
 
-      {/* Processing status */}
       {isProcessing && (
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex flex-col items-center">
-            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-              <div 
-                className="bg-blue-600 h-2.5 rounded-full" 
-                style={{ width: `${processingProgress}%` }}
-              ></div>
-            </div>
-            <p className="text-sm text-gray-600">{processingStatus}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Error message */}
-      {error && (
-        <div className="p-4 border-b border-gray-200 bg-red-50">
-          <p className="text-sm text-red-600">{error}</p>
-        </div>
-      )}
-
-      {/* Survey structure */}
-      {questions.length > 0 && (
-        <div className="p-4 border-b border-gray-200">
-          <h3 className="text-md font-medium mb-2">Survey Structure</h3>
-          <div className="max-h-60 overflow-y-auto">
-            {sections.map((section, sectionIndex) => (
-              <div key={sectionIndex} className="mb-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-1">{section}</h4>
-                <ul className="pl-4">
-                  {questions
-                    .filter(q => q.section === section)
-                    .map((question, qIndex) => (
-                      <li key={qIndex} className="text-sm text-gray-600 mb-1 truncate">
-                        {question.text} 
-                        <span className="text-xs text-gray-500 ml-1">
-                          ({question.type}{question.options?.length ? `, ${question.options.length} options` : ''})
-                        </span>
-                      </li>
-                    ))}
-                </ul>
+        <div className="p-4">
+          <Alert className="mb-4">
+            <AlertDescription>
+              <div className="flex flex-col space-y-2">
+                <div className="flex justify-between items-center">
+                  <span>{processingStatus}</span>
+                  <span className="text-sm text-gray-500">{processingProgress}%</span>
+                </div>
+                <Progress value={processingProgress} className="h-2" />
               </div>
-            ))}
-          </div>
+            </AlertDescription>
+          </Alert>
         </div>
       )}
 
-      {/* Response form */}
-      {questions.length > 0 && !showPreview && !showFrequencyCounts && (
-        <div className="p-4 border-b border-gray-200">
-          <h3 className="text-md font-medium mb-2">Add Response</h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {sections.map((section, sectionIndex) => (
-              <div key={sectionIndex} className="mb-6">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">{section}</h4>
+      {error && (
+        <div className="p-4">
+          <Alert variant="destructive" className="mb-4">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        </div>
+      )}
+
+      <div className="p-4">
+        {questions.length === 0 && !isProcessing && !error ? (
+          <div className="text-center py-8">
+            <FileText className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+            <h3 className="text-lg font-medium mb-2">No Survey Loaded</h3>
+            <p className="text-gray-600 mb-4">Upload a document to get started</p>
+            <Button 
+              onClick={() => fileInputRef.current?.click()}
+              className="mx-auto"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Document
+            </Button>
+          </div>
+        ) : showFrequencyCounts ? (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium">Frequency Counts</h3>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowFrequencyCounts(false)}
+                className="text-gray-500"
+              >
+                Back to Survey
+              </Button>
+            </div>
+            
+            {frequencyCounts.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-gray-500">No data available for frequency counts.</p>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {frequencyCounts.map((item, index) => (
+                  <div key={index} className="border rounded-lg p-4">
+                    <h4 className="font-medium mb-3">{item.questionText}</h4>
+                    <div className="space-y-2">
+                      {Object.entries(item.counts).map(([option, count], idx) => (
+                        <div key={idx} className="flex items-center justify-between">
+                          <span className="text-sm">{option}</span>
+                          <div className="flex items-center">
+                            <div className="w-48 bg-gray-200 rounded-full h-2.5 mr-2">
+                              <div 
+                                className="bg-blue-600 h-2.5 rounded-full" 
+                                style={{ 
+                                  width: `${Math.round((count / responses.length) * 100)}%` 
+                                }}
+                              ></div>
+                            </div>
+                            <span className="text-sm text-gray-500">
+                              {count} ({Math.round((count / responses.length) * 100)}%)
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : showPreview ? (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  {questions.map(q => (
+                    <th
+                      key={q.id}
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      {q.text}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {responses.map((response, idx) => (
+                  <tr key={idx}>
+                    {questions.map(q => (
+                      <td key={q.id} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {Array.isArray(response[q.id]) 
+                          ? (response[q.id] as string[]).join(', ')
+                          : String(response[q.id] || '')}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {sections.map(section => (
+              <div key={section} className="border rounded-lg p-4">
+                <h3 className="text-lg font-medium mb-4">{section}</h3>
                 <div className="space-y-4">
                   {questions
                     .filter(q => q.section === section)
-                    .map((question, qIndex) => (
-                      <div key={qIndex} className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                    .map(question => (
+                      <div key={question.id} className="space-y-2">
+                        <label className="block text-sm font-medium text-gray-700">
                           {question.text}
                           {question.description && (
-                            <span className="block text-xs text-gray-500 mt-0.5">{question.description}</span>
+                            <span className="text-sm text-gray-500 ml-2">
+                              ({question.description})
+                            </span>
                           )}
                         </label>
-                        
+                        {question.type === 'radio' && question.options && (
+                          <div className="space-y-2">
+                            {question.options.map((option, idx) => {
+                              // Check if this option requires a text input (ends with ___ or contains 'specify')
+                              const needsTextInput = option.endsWith('___') || 
+                                                    option.toLowerCase().includes('specify') ||
+                                                    option.toLowerCase().includes('other');
+                              
+                              return (
+                                <div key={idx} className="flex flex-col space-y-1">
+                                  <label className="flex items-center space-x-2">
+                                    <input
+                                      type="radio"
+                                      name={question.id}
+                                      value={option}
+                                      onChange={e => {
+                                        const newResponse = {
+                                          ...currentResponse,
+                                          [question.id]: e.target.value
+                                        };
+                                        
+                                        // Reset all text inputs for this question
+                                        question.options?.forEach(opt => {
+                                          if (opt.endsWith('___') || opt.toLowerCase().includes('specify') || opt.toLowerCase().includes('other')) {
+                                            delete newResponse[`${question.id}_${opt}`];
+                                          }
+                                        });
+                                        
+                                        setCurrentResponse(newResponse);
+                                      }}
+                                      checked={currentResponse[question.id] === option}
+                                      className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
+                                    />
+                                    <span className="text-sm text-gray-700">{option}</span>
+                                  </label>
+                                  
+                                  {/* Show text input if this option is selected and needs text input */}
+                                  {needsTextInput && currentResponse[question.id] === option && (
+                                    <div className="ml-6">
+                                      <input
+                                        type="text"
+                                        placeholder="Please specify..."
+                                        value={String(currentResponse[`${question.id}_${option}`] || '')}
+                                        onChange={e => 
+                                          setCurrentResponse({
+                                            ...currentResponse,
+                                            [`${question.id}_${option}`]: e.target.value
+                                          })
+                                        }
+                                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {question.type === 'checkbox' && question.options && (
+                          <div className="space-y-2">
+                            {question.options.map((option, idx) => {
+                              // Check if this option requires a text input (ends with ___ or contains 'specify')
+                              const needsTextInput = option.endsWith('___') || 
+                                                    option.toLowerCase().includes('specify') ||
+                                                    option.toLowerCase().includes('other');
+                              
+                              // Check if this option is selected
+                              const isSelected = (currentResponse[question.id] as string[] || []).includes(option);
+                              
+                              return (
+                                <div key={idx} className="flex flex-col space-y-1">
+                                  <label className="flex items-center space-x-2">
+                                    <input
+                                      type="checkbox"
+                                      value={option}
+                                      onChange={e => {
+                                        const currentValues = (currentResponse[question.id] as string[]) || [];
+                                        const newValues = e.target.checked
+                                          ? [...currentValues, option]
+                                          : currentValues.filter(v => v !== option);
+                                        
+                                        const newResponse = {
+                                          ...currentResponse,
+                                          [question.id]: newValues
+                                        };
+                                        
+                                        // If unchecking, remove the text input value
+                                        if (!e.target.checked && needsTextInput) {
+                                          delete newResponse[`${question.id}_${option}`];
+                                        }
+                                        
+                                        setCurrentResponse(newResponse);
+                                      }}
+                                      checked={isSelected}
+                                      className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                    />
+                                    <span className="text-sm text-gray-700">{option}</span>
+                                  </label>
+                                  
+                                  {/* Show text input if this option is selected and needs text input */}
+                                  {needsTextInput && isSelected && (
+                                    <div className="ml-6">
+                                      <input
+                                        type="text"
+                                        placeholder="Please specify..."
+                                        value={String(currentResponse[`${question.id}_${option}`] || '')}
+                                        onChange={e => 
+                                          setCurrentResponse({
+                                            ...currentResponse,
+                                            [`${question.id}_${option}`]: e.target.value
+                                          })
+                                        }
+                                        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                         {question.type === 'text' && (
                           <input
                             type="text"
-                            value={currentResponse[question.id] || ''}
-                            onChange={(e) => handleResponseChange(question.id, e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                            value={String(currentResponse[question.id] || '')}
+                            onChange={e =>
+                              setCurrentResponse({
+                                ...currentResponse,
+                                [question.id]: e.target.value
+                              })
+                            }
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           />
                         )}
-                        
                         {question.type === 'number' && (
                           <input
                             type="number"
-                            value={currentResponse[question.id] || ''}
-                            onChange={(e) => handleResponseChange(question.id, e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                            value={String(currentResponse[question.id] || '')}
+                            onChange={e =>
+                              setCurrentResponse({
+                                ...currentResponse,
+                                [question.id]: Number(e.target.value)
+                              })
+                            }
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           />
                         )}
-                        
-                        {question.type === 'radio' && question.options && (
-                          <div className="space-y-2 mt-1">
-                            {question.options.map((option, oIndex) => (
-                              <div key={oIndex} className="flex items-center">
-                                <input
-                                  type="radio"
-                                  id={`${question.id}-${oIndex}`}
-                                  name={question.id}
-                                  value={option}
-                                  checked={currentResponse[question.id] === option}
-                                  onChange={(e) => handleResponseChange(question.id, e.target.value)}
-                                  className="h-4 w-4 text-blue-600 border-gray-300"
-                                />
-                                <label htmlFor={`${question.id}-${oIndex}`} className="ml-2 text-sm text-gray-700">
-                                  {option}
-                                </label>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        {question.type === 'checkbox' && question.options && (
-                          <div className="space-y-2 mt-1">
-                            {question.options.map((option, oIndex) => (
-                              <div key={oIndex} className="flex items-center">
-                                <input
-                                  type="checkbox"
-                                  id={`${question.id}-${oIndex}`}
-                                  value={option}
-                                  checked={Array.isArray(currentResponse[question.id]) && 
-                                    (currentResponse[question.id] as string[]).includes(option)}
-                                  onChange={(e) => handleCheckboxChange(question.id, option, e.target.checked)}
-                                  className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                                />
-                                <label htmlFor={`${question.id}-${oIndex}`} className="ml-2 text-sm text-gray-700">
-                                  {option}
-                                </label>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
                         {question.type === 'select' && question.options && (
                           <select
-                            value={currentResponse[question.id] || ''}
-                            onChange={(e) => handleResponseChange(question.id, e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                            value={String(currentResponse[question.id] || '')}
+                            onChange={e =>
+                              setCurrentResponse({
+                                ...currentResponse,
+                                [question.id]: e.target.value
+                              })
+                            }
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           >
                             <option value="">Select an option</option>
-                            {question.options.map((option, oIndex) => (
-                              <option key={oIndex} value={option}>
+                            {question.options.map((option, idx) => (
+                              <option key={idx} value={option}>
                                 {option}
                               </option>
                             ))}
@@ -693,173 +982,17 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
                 </div>
               </div>
             ))}
-            
-            <div className="flex justify-end">
-              <Button type="submit" className="flex items-center">
-                <Database className="h-4 w-4 mr-2" />
-                Add Response
-              </Button>
-            </div>
+            {sections.length > 0 && (
+              <div className="flex justify-end">
+                <Button type="submit" className="flex items-center">
+                  <Database className="h-4 w-4 mr-2" />
+                  Save Response
+                </Button>
+              </div>
+            )}
           </form>
-        </div>
-      )}
-
-      {/* Response preview */}
-      {showPreview && responses.length > 0 && (
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-md font-medium">Responses ({responses.length})</h3>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => setShowPreview(false)}
-              className="flex items-center"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Back
-            </Button>
-          </div>
-          
-          <div className="overflow-x-auto">
-            <div className="inline-block min-w-full align-middle">
-              <div className="overflow-hidden border border-gray-200 rounded-lg">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        #
-                      </th>
-                      {questions.map((question, qIndex) => (
-                        <th 
-                          key={qIndex} 
-                          scope="col" 
-                          className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                        >
-                          <div className="max-w-[150px] sm:max-w-xs truncate" title={question.text}>
-                            {question.text}
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {responses.map((response, rIndex) => (
-                      <tr key={rIndex}>
-                        <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                          {rIndex + 1}
-                        </td>
-                        {questions.map((question, qIndex) => (
-                          <td key={qIndex} className="px-3 py-2 text-sm text-gray-500">
-                            <div className="max-w-[150px] sm:max-w-xs overflow-hidden text-ellipsis">
-                              {Array.isArray(response[question.id]) 
-                                ? (response[question.id] as string[]).join(', ')
-                                : response[question.id] || '-'}
-                            </div>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Frequency counts */}
-      {showFrequencyCounts && frequencyCounts.length > 0 && (
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-md font-medium">Frequency Counts</h3>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => setShowFrequencyCounts(false)}
-              className="flex items-center"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Back
-            </Button>
-          </div>
-          
-          <div className="space-y-6">
-            {frequencyCounts.map((item, index) => (
-              <div key={index} className="bg-gray-50 p-3 rounded-lg">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">{item.questionText}</h4>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200 border border-gray-200 rounded-lg">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Option
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Count
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Percentage
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {Object.entries(item.counts).map(([option, count], oIndex) => {
-                        const total = Object.values(item.counts).reduce((sum, c) => sum + c, 0);
-                        const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
-                        
-                        return (
-                          <tr key={oIndex}>
-                            <td className="px-3 py-2 text-sm text-gray-500">
-                              <div className="max-w-[150px] sm:max-w-xs truncate">
-                                {option}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-sm text-gray-500">
-                              {count}
-                            </td>
-                            <td className="px-3 py-2 text-sm text-gray-500">
-                              {percentage}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      <tr className="bg-gray-50">
-                        <td className="px-3 py-2 text-sm font-medium text-gray-700">
-                          Total
-                        </td>
-                        <td className="px-3 py-2 text-sm font-medium text-gray-700">
-                          {Object.values(item.counts).reduce((sum, count) => sum + count, 0)}
-                        </td>
-                        <td className="px-3 py-2 text-sm font-medium text-gray-700">
-                          100%
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* No data state */}
-      {!isProcessing && !error && questions.length === 0 && (
-        <div className="p-8 flex flex-col items-center justify-center text-center">
-          <FileText className="h-12 w-12 text-gray-400 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-1">No survey loaded</h3>
-          <p className="text-sm text-gray-500 mb-4 max-w-md">
-            Upload a Word document (.docx) or text file (.txt) containing your survey questions to get started.
-          </p>
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center"
-          >
-            <Upload className="h-4 w-4 mr-2" />
-            Upload Survey
-          </Button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

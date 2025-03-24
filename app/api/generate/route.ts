@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import axios from 'axios';
 
 export async function POST(request: Request) {
@@ -55,8 +55,6 @@ async function callGeminiAPI(systemPrompt: string, data?: any[]) {
       fullPrompt = `${tableStr}\n\n${systemPrompt}\n\nMake sure to include at least one properly formatted markdown table in your analysis. The table should use the | and - characters for formatting.`;
     }
 
-    console.log('Sending request to Gemini API...');
-    
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
@@ -116,8 +114,6 @@ async function callOpenRouterAPI(model: string, messages: any, systemPrompt: str
       formattedMessages.unshift({ role: 'system', content: systemPrompt });
     }
 
-    console.log('Sending request to OpenRouter API...');
-    
     const response = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
