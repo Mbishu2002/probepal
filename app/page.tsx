@@ -2,12 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
+import api from '../lib/api';
 import { read, utils } from 'xlsx';
 import LandingPage from '@/components/LandingPage';
 import Sidebar from '@/components/Sidebar';
 import EditableMarkdown from '@/components/EditableMarkdown';
-import { Menu, File, BarChart, ClipboardList, ChevronLeft } from 'lucide-react';
+import { Menu, File, BarChart, ClipboardList, ChevronLeft, Database, Microscope } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import SurveyConverter from '@/components/SurveyConverter';
@@ -38,7 +38,7 @@ export default function Home() {
   useEffect(() => {
     const fetchSystemPrompt = async () => {
       try {
-        const response = await axios.get('/api/system-prompt');
+        const response = await api.get('/api/system-prompt');
         console.log('System prompt response:', response.data);
         setSystemPrompt(response.data.prompt);
       } catch (error) {
@@ -153,7 +153,7 @@ export default function Home() {
 
     try {
       const jsonData = activeFile.data.slice(0, 100); // Limit to first 100 rows for performance
-      const response = await axios.post('/api/generate', {
+      const response = await api.post('/api/generate', {
         data: jsonData,
         model: selectedModel,
         systemPrompt
@@ -201,7 +201,25 @@ export default function Home() {
   return (
     <main className="min-h-screen p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 md:mb-8 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600">Research Assistant</h1>
+        <div className="flex items-center justify-between mb-6 md:mb-8">
+          <h1 className="text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600 flex items-center">
+            <Microscope className="h-6 w-6 mr-2 text-blue-600" />
+            ProbePal
+          </h1>
+          {/* Mobile sidebar toggle button */}
+          {showSidebar && (
+            <div className="md:hidden">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="bg-white" 
+                onClick={toggleMobileSidebar}
+              >
+                <Menu className="h-5 w-5" />
+              </Button>
+            </div>
+          )}
+        </div>
         
         <Tabs 
           defaultValue="analysis" 
@@ -209,29 +227,29 @@ export default function Home() {
           value={activeTab}
           onValueChange={handleTabChange}
         >
-          <div className="border-b border-gray-200 mb-6">
-            <TabsList className="w-full flex rounded-none bg-transparent p-0 mb-0">
+          <div className="border-b border-gray-200 mb-6 overflow-x-auto">
+            <TabsList className="w-full flex rounded-none bg-transparent p-0 mb-0 min-w-max">
               <TabsTrigger 
                 value="analysis" 
-                className={`flex items-center justify-center py-3 px-6 text-base font-medium border-b-2 transition-all duration-200 ease-in-out ${
+                className={`flex items-center justify-center py-2 md:py-3 px-4 md:px-6 text-sm md:text-base font-medium border-b-2 transition-all duration-200 ease-in-out ${
                   activeTab === 'analysis' 
                     ? 'border-blue-600 text-blue-600' 
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                <BarChart className="h-4 w-4 mr-2" />
-                Analysis & Charts
+                <BarChart className="h-4 w-4 mr-1 md:mr-2" />
+                <span className="whitespace-nowrap">Analysis & Charts</span>
               </TabsTrigger>
               <TabsTrigger 
                 value="survey" 
-                className={`flex items-center justify-center py-3 px-6 text-base font-medium border-b-2 transition-all duration-200 ease-in-out ${
+                className={`flex items-center justify-center py-2 md:py-3 px-4 md:px-6 text-sm md:text-base font-medium border-b-2 transition-all duration-200 ease-in-out ${
                   activeTab === 'survey' 
                     ? 'border-blue-600 text-blue-600' 
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                <ClipboardList className="h-4 w-4 mr-2" />
-                Survey Data Collection
+                <ClipboardList className="h-4 w-4 mr-1 md:mr-2" />
+                <span className="whitespace-nowrap">Survey Data</span>
               </TabsTrigger>
             </TabsList>
           </div>
@@ -241,18 +259,6 @@ export default function Home() {
               <LandingPage onFileUpload={handleAddFile} />
             ) : (
               <div className="relative flex flex-col md:flex-row h-screen overflow-hidden">
-                {/* Mobile sidebar toggle button */}
-                <div className="md:hidden fixed top-4 left-4 z-20">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="bg-white" 
-                    onClick={toggleMobileSidebar}
-                  >
-                    <Menu className="h-5 w-5" />
-                  </Button>
-                </div>
-                
                 {/* Sidebar - hidden on mobile by default, shown when mobileSidebarOpen is true */}
                 <div className={`
                   ${mobileSidebarOpen ? 'fixed inset-0 z-10' : 'hidden'} 
@@ -277,7 +283,7 @@ export default function Home() {
                 </div>
                 
                 {/* Main content area */}
-                <div className="flex-1 overflow-auto p-4 md:p-6 pt-16 md:pt-6">
+                <div className="flex-1 overflow-auto p-4 md:p-6">
                   {generatedContent ? (
                     <EditableMarkdown 
                       content={generatedContent} 
