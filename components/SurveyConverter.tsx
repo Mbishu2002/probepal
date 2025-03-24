@@ -3,7 +3,9 @@ import { Button } from './ui/button';
 import { Upload, FileText, Database, Eye, Download, Wand2, ChevronLeft, BarChart } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
-import axios from 'axios';
+import { saveAs } from 'file-saver';
+import { v4 as uuidv4 } from 'uuid';
+import api from '../lib/api';
 import { Alert, AlertDescription } from "./ui/alert"
 import { Progress } from "./ui/progress"
 
@@ -76,7 +78,7 @@ const SurveyConverter: React.FC<SurveyConverterProps> = ({ onDataCollected, init
       setProcessingStatus('Analyzing document structure...');
 
       // Use AI to analyze the document structure
-      const response = await axios.post('/api/analyze-survey', {
+      const response = await api.post('/api/analyze-survey', {
         documentText: text,
         systemPrompt: `You are an expert at analyzing survey documents. Your task is to:
         1. Extract the survey questions exactly as they appear in the document without changing their structure or wording

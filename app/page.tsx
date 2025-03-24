@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
+import api from '../lib/api';
 import { read, utils } from 'xlsx';
 import LandingPage from '@/components/LandingPage';
 import Sidebar from '@/components/Sidebar';
@@ -38,7 +38,7 @@ export default function Home() {
   useEffect(() => {
     const fetchSystemPrompt = async () => {
       try {
-        const response = await axios.get('/api/system-prompt');
+        const response = await api.get('/api/system-prompt');
         console.log('System prompt response:', response.data);
         setSystemPrompt(response.data.prompt);
       } catch (error) {
@@ -153,7 +153,7 @@ export default function Home() {
 
     try {
       const jsonData = activeFile.data.slice(0, 100); // Limit to first 100 rows for performance
-      const response = await axios.post('/api/generate', {
+      const response = await api.post('/api/generate', {
         data: jsonData,
         model: selectedModel,
         systemPrompt
