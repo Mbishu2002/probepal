@@ -23,7 +23,8 @@ export async function middleware(request: NextRequest) {
       // These are endpoints that don't expose sensitive data or operations
       const publicEndpoints = [
         '/api/system-prompt',
-        '/api/generate'
+        '/api/generate',
+        '/api/analyze-survey'
       ];
       
       const isPublicEndpoint = publicEndpoints.some(endpoint => 
