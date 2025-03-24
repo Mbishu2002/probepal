@@ -191,15 +191,45 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
           const container = tableContainers[i] as HTMLElement;
           const tableIndex = container.getAttribute('data-table-index');
           
-          // Check if chart is visible (table is hidden)
-          const chartDiv = container.querySelector('.google-visualization-chartWrapper');
-          if (chartDiv && window.getComputedStyle(chartDiv).display !== 'none') {
-            const canvas = container.querySelector('canvas');
-            if (canvas) {
-              try {
-                // Get chart type from select
-                const chartTypeSelect = container.querySelector('select');
-                const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+          // Check if the chart is visible - look for the chart toggle state
+          const tableElement = container.querySelector('.min-w-full');
+          const chartWrapper = container.querySelector('.google-visualization-chartWrapper');
+          
+          // If chart wrapper exists and table is hidden, export the chart
+          if (chartWrapper && 
+              (tableElement === null || 
+               window.getComputedStyle(tableElement).display === 'none' || 
+               window.getComputedStyle(chartWrapper).display !== 'none')) {
+            
+            // Get chart type from select
+            const chartTypeSelect = container.querySelector('select');
+            const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+            
+            try {
+              // Get the chart SVG element
+              const chartSvg = container.querySelector('svg');
+              if (chartSvg) {
+                // Create a canvas element
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Set canvas dimensions to match SVG
+                const svgRect = chartSvg.getBoundingClientRect();
+                canvas.width = svgRect.width;
+                canvas.height = svgRect.height;
+                
+                // Create an image from the SVG
+                const svgData = new XMLSerializer().serializeToString(chartSvg);
+                const img = new Image();
+                
+                // Wait for the image to load before drawing to canvas
+                await new Promise((resolve) => {
+                  img.onload = resolve;
+                  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+                });
+                
+                // Draw the image to canvas
+                ctx?.drawImage(img, 0, 0);
                 
                 // Convert canvas to base64 image
                 const imageData = canvas.toDataURL('image/png');
@@ -214,9 +244,35 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
                   const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
                   tempContent = tempContent.replace(targetTable, imageMarkdown);
                 }
-              } catch (error) {
-                console.error('Error capturing chart:', error);
+              } else {
+                // Fallback to using the chart container if SVG is not available
+                const chartContainer = container.querySelector('.google-visualization-chartWrapper');
+                if (chartContainer) {
+                  // Use html2canvas as fallback
+                  const html2canvas = await import('html2canvas');
+                  const canvas = await html2canvas.default(chartContainer as HTMLElement, {
+                    scale: 2, // Higher scale for better quality
+                    backgroundColor: '#ffffff',
+                    logging: false
+                  });
+                  
+                  // Convert canvas to base64 image
+                  const imageData = canvas.toDataURL('image/png');
+                  
+                  // Find and replace the corresponding table in markdown
+                  const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
+                  const tableMatches = tempContent.match(tableRegex) || [];
+                  
+                  if (tableMatches[parseInt(tableIndex || '0')]) {
+                    const targetTable = tableMatches[parseInt(tableIndex || '0')];
+                    // Add proper spacing before and after the chart
+                    const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
+                    tempContent = tempContent.replace(targetTable, imageMarkdown);
+                  }
+                }
               }
+            } catch (error) {
+              console.error('Error capturing chart:', error);
             }
           }
         }
@@ -242,15 +298,45 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
           const container = tableContainers[i] as HTMLElement;
           const tableIndex = container.getAttribute('data-table-index');
           
-          // Check if chart is visible (table is hidden)
-          const chartDiv = container.querySelector('.google-visualization-chartWrapper');
-          if (chartDiv && window.getComputedStyle(chartDiv).display !== 'none') {
-            const canvas = container.querySelector('canvas');
-            if (canvas) {
-              try {
-                // Get chart type from select
-                const chartTypeSelect = container.querySelector('select');
-                const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+          // Check if the chart is visible - look for the chart toggle state
+          const tableElement = container.querySelector('.min-w-full');
+          const chartWrapper = container.querySelector('.google-visualization-chartWrapper');
+          
+          // If chart wrapper exists and table is hidden, export the chart
+          if (chartWrapper && 
+              (tableElement === null || 
+               window.getComputedStyle(tableElement).display === 'none' || 
+               window.getComputedStyle(chartWrapper).display !== 'none')) {
+            
+            // Get chart type from select
+            const chartTypeSelect = container.querySelector('select');
+            const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+            
+            try {
+              // Get the chart SVG element
+              const chartSvg = container.querySelector('svg');
+              if (chartSvg) {
+                // Create a canvas element
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Set canvas dimensions to match SVG
+                const svgRect = chartSvg.getBoundingClientRect();
+                canvas.width = svgRect.width;
+                canvas.height = svgRect.height;
+                
+                // Create an image from the SVG
+                const svgData = new XMLSerializer().serializeToString(chartSvg);
+                const img = new Image();
+                
+                // Wait for the image to load before drawing to canvas
+                await new Promise((resolve) => {
+                  img.onload = resolve;
+                  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+                });
+                
+                // Draw the image to canvas
+                ctx?.drawImage(img, 0, 0);
                 
                 // Convert canvas to base64 image
                 const imageData = canvas.toDataURL('image/png');
@@ -265,9 +351,35 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
                   const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
                   tempContent = tempContent.replace(targetTable, imageMarkdown);
                 }
-              } catch (error) {
-                console.error('Error capturing chart:', error);
+              } else {
+                // Fallback to using the chart container if SVG is not available
+                const chartContainer = container.querySelector('.google-visualization-chartWrapper');
+                if (chartContainer) {
+                  // Use html2canvas as fallback
+                  const html2canvas = await import('html2canvas');
+                  const canvas = await html2canvas.default(chartContainer as HTMLElement, {
+                    scale: 2, // Higher scale for better quality
+                    backgroundColor: '#ffffff',
+                    logging: false
+                  });
+                  
+                  // Convert canvas to base64 image
+                  const imageData = canvas.toDataURL('image/png');
+                  
+                  // Find and replace the corresponding table in markdown
+                  const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
+                  const tableMatches = tempContent.match(tableRegex) || [];
+                  
+                  if (tableMatches[parseInt(tableIndex || '0')]) {
+                    const targetTable = tableMatches[parseInt(tableIndex || '0')];
+                    // Add proper spacing before and after the chart
+                    const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
+                    tempContent = tempContent.replace(targetTable, imageMarkdown);
+                  }
+                }
               }
+            } catch (error) {
+              console.error('Error capturing chart:', error);
             }
           }
         }
