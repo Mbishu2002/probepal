@@ -17,6 +17,9 @@ import * as ReactDOM from 'react-dom/client';
 import html2canvas from 'html2canvas';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { useAuth } from '@/contexts/AuthContext';
+import { trackDocumentExport, getRemainingExports } from '@/lib/subscription';
+import { useRouter } from 'next/navigation';
 
 // Extend the window interface for our chart storage
 declare global {
@@ -32,13 +35,19 @@ interface EditableMarkdownProps {
   content: string;
   isLoading: boolean;
   onContentChange?: (content: string) => void;
+  documentId?: string;
+  isSuperUser?: boolean;
 }
 
 const EditableMarkdown: React.FC<EditableMarkdownProps> = ({ 
   content, 
   isLoading,
-  onContentChange 
+  onContentChange,
+  documentId,
+  isSuperUser 
 }) => {
+  const router = useRouter();
+  const { user } = useAuth();
   const [documentTitle, setDocumentTitle] = useState<string>('Research Results');
   const [editMode, setEditMode] = useState<boolean>(false);
   const [editableContent, setEditableContent] = useState<string>(content);
@@ -54,6 +63,8 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   const [currentMatch, setCurrentMatch] = useState<number>(0);
   const [matches, setMatches] = useState<number[]>([]);
   
+  const [remainingExports, setRemainingExports] = useState<{ remaining: number; plan: string } | null>(null);
+
   // Process markdown content when it changes
   useEffect(() => {
     setEditableContent(content);
@@ -324,305 +335,63 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
     }
   };
 
-  const handleExportDocx = async () => {
-    try {
-      let contentToExport = editableContent;
-      
-      // Find all table containers
-      const tableContainers = document.querySelectorAll('[data-table-index]');
-      console.log('Found table containers:', tableContainers.length);
-      
-      if (tableContainers.length > 0) {
-        let tempContent = editableContent;
-        
-        for (let i = 0; i < tableContainers.length; i++) {
-          const container = tableContainers[i] as HTMLElement;
-          const tableIndex = container.getAttribute('data-table-index');
-          console.log(`Processing container ${i}, table index:`, tableIndex);
-          
-          // Check if this container has a chart that's being displayed
-          const hasChart = container.getAttribute('data-has-chart') === 'true';
-          console.log('Container has been tagged with data-has-chart:', hasChart);
-          
-          // Look for any chart-related elements
-          const chartDiv = container.querySelector('.flex.justify-center.items-center');
-          console.log('Found chart div with flex classes:', !!chartDiv);
-          
-          // If we have a potential chart container, try to capture it
-          if (hasChart || (chartDiv && window.getComputedStyle(chartDiv).display !== 'none')) {
-            try {
-              console.log('Attempting to capture chart');
-              
-              // Get chart type from select
-              const chartTypeSelect = container.querySelector('select');
-              const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
-              console.log('Chart title:', chartTitle);
-              
-              // Try different approaches to get the chart image
-              let imageData: string | null = null;
-              
-              // 1. First check for chartInstance reference directly on container or chart div
-              if (hasChart && (container as any).__chartInstance) {
-                try {
-                  const chart = (container as any).__chartInstance;
-                  if (chart && typeof chart.getImageURI === 'function') {
-                    imageData = chart.getImageURI();
-                    console.log('Got image from container.__chartInstance:', !!imageData);
-                  }
-                } catch (e) {
-                  console.error('Error getting image from container.__chartInstance:', e);
-                }
-              }
-              
-              // 2. Check for chartIndex reference and lookup in window.__chartInstances
-              if (!imageData && (container as any).__chartIndex !== undefined && window.__chartInstances) {
-                try {
-                  const chartIndex = (container as any).__chartIndex;
-                  const chartData = window.__chartInstances[chartIndex];
-                  if (chartData && chartData.getImageURI) {
-                    imageData = chartData.getImageURI();
-                    console.log(`Got image from window.__chartInstances[${chartIndex}]:`, !!imageData);
-                  }
-                } catch (e) {
-                  console.error('Error getting image from window.__chartInstances:', e);
-                }
-              }
-              
-              // 3. If still no image, try to find a visible chart in this container
-              if (!imageData && chartDiv) {
-                try {
-                  // Look for all possible chart elements
-                  const visCharts = chartDiv.querySelectorAll('div[dir="ltr"]');
-                  console.log('Found possible chart elements:', visCharts.length);
-                  
-                  // Try to find one with a getImageURI method
-                  for (let j = 0; j < visCharts.length; j++) {
-                    const el = visCharts[j] as any;
-                    if (el.__chartInstance && typeof el.__chartInstance.getImageURI === 'function') {
-                      imageData = el.__chartInstance.getImageURI();
-                      console.log(`Got image from visCharts[${j}].__chartInstance:`, !!imageData);
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  console.error('Error finding chart elements:', e);
-                }
-              }
-              
-              // 4. If all direct methods fail, try html2canvas as fallback
-              if (!imageData && chartDiv) {
-                console.log('Falling back to html2canvas');
-                try {
-                  // Give it a little time for any animations to complete
-                  await new Promise(resolve => setTimeout(resolve, 500));
-                  
-                  // Use html2canvas to capture the chart
-                  const canvasDocx = await html2canvas(chartDiv as HTMLElement, {
-                    logging: true,
-                    useCORS: true,
-                    allowTaint: true,
-                    backgroundColor: null,
-                    scale: 2 // Higher quality
-                  });
-                  imageData = canvasDocx.toDataURL('image/png');
-                  console.log('Got image from html2canvas:', !!imageData, 'length:', imageData?.length);
-                } catch (e) {
-                  console.error('Error using html2canvas:', e);
-                }
-              }
-              
-              // If we have image data, replace the table with it
-              if (imageData && imageData.length > 100) {  // Basic validation of image data
-                // Find and replace the corresponding table in markdown
-                const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
-                const tableMatches = tempContent.match(tableRegex) || [];
-                console.log('Found table matches:', tableMatches.length);
-                
-                if (tableMatches[parseInt(tableIndex || '0')]) {
-                  const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                  
-                  // Create a nicely formatted markdown with the chart image
-                  // Add proper spacing but no chart type title
-                  const imageMarkdown = `
-
-![Chart](${imageData})
-
-`;
-                  
-                  tempContent = tempContent.replace(targetTable, imageMarkdown);
-                  console.log('Replaced table with image in markdown');
-                } else {
-                  console.log('Table match not found for index:', tableIndex);
-                }
-              } else {
-                console.log('Failed to get valid image data');
-              }
-            } catch (error) {
-              console.error('Error capturing chart:', error);
-            }
-          } else {
-            console.log('Chart not visible or not found');
-          }
-        }
-        contentToExport = tempContent;
-      }
-      
-      console.log('Exporting to DOCX');
-      await exportToDocx(contentToExport, `${documentTitle || 'research_document'}.docx`);
-      console.log('Export complete');
-    } catch (error) {
-      console.error('Error exporting to DOCX:', error);
+  const handleExport = async (format: 'docx' | 'pdf') => {
+    if (!user) {
+      router.push('/auth');
+      return;
     }
-  };
 
-  const handleExportPdf = async () => {
+    // Check if user has remaining exports, bypass for fmbishu@gmail.com
+    if (user.email !== 'fmbishu@gmail.com' && remainingExports?.remaining === 0) {
+      alert('You have reached your export limit. Please upgrade your plan to continue exporting.');
+      router.push('/pricing');
+      return;
+    }
+
     try {
-      let contentToExport = editableContent;
-      
-      // Find all table containers
-      const tableContainers = document.querySelectorAll('[data-table-index]');
-      console.log('Found table containers for PDF:', tableContainers.length);
-      
-      if (tableContainers.length > 0) {
-        let tempContent = editableContent;
-        
-        for (let i = 0; i < tableContainers.length; i++) {
-          const container = tableContainers[i] as HTMLElement;
-          const tableIndex = container.getAttribute('data-table-index');
-          console.log(`Processing container ${i} for PDF, table index:`, tableIndex);
-          
-          // Check if this container has a chart that's being displayed
-          const hasChart = container.getAttribute('data-has-chart') === 'true';
-          console.log('Container has been tagged with data-has-chart for PDF:', hasChart);
-          
-          // Look for any chart-related elements
-          const chartDiv = container.querySelector('.flex.justify-center.items-center');
-          console.log('Found chart div with flex classes for PDF:', !!chartDiv);
-          
-          // If we have a potential chart container, try to capture it
-          if (hasChart || (chartDiv && window.getComputedStyle(chartDiv).display !== 'none')) {
-            try {
-              console.log('Attempting to capture chart for PDF');
-              
-              // Get chart type from select
-              const chartTypeSelect = container.querySelector('select');
-              const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
-              console.log('Chart title for PDF:', chartTitle);
-              
-              // Try different approaches to get the chart image
-              let imageData: string | null = null;
-              
-              // 1. First check for chartInstance reference directly on container or chart div
-              if (hasChart && (container as any).__chartInstance) {
-                try {
-                  const chart = (container as any).__chartInstance;
-                  if (chart && typeof chart.getImageURI === 'function') {
-                    imageData = chart.getImageURI();
-                    console.log('Got image from container.__chartInstance for PDF:', !!imageData);
-                  }
-                } catch (e) {
-                  console.error('Error getting image from container.__chartInstance for PDF:', e);
-                }
-              }
-              
-              // 2. Check for chartIndex reference and lookup in window.__chartInstances
-              if (!imageData && (container as any).__chartIndex !== undefined && window.__chartInstances) {
-                try {
-                  const chartIndex = (container as any).__chartIndex;
-                  const chartData = window.__chartInstances[chartIndex];
-                  if (chartData && chartData.getImageURI) {
-                    imageData = chartData.getImageURI();
-                    console.log(`Got image from window.__chartInstances[${chartIndex}] for PDF:`, !!imageData);
-                  }
-                } catch (e) {
-                  console.error('Error getting image from window.__chartInstances for PDF:', e);
-                }
-              }
-              
-              // 3. If still no image, try to find a visible chart in this container
-              if (!imageData && chartDiv) {
-                try {
-                  // Look for all possible chart elements
-                  const visCharts = chartDiv.querySelectorAll('div[dir="ltr"]');
-                  console.log('Found possible chart elements for PDF:', visCharts.length);
-                  
-                  // Try to find one with a getImageURI method
-                  for (let j = 0; j < visCharts.length; j++) {
-                    const el = visCharts[j] as any;
-                    if (el.__chartInstance && typeof el.__chartInstance.getImageURI === 'function') {
-                      imageData = el.__chartInstance.getImageURI();
-                      console.log(`Got image from visCharts[${j}].__chartInstance for PDF:`, !!imageData);
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  console.error('Error finding chart elements for PDF:', e);
-                }
-              }
-              
-              // 4. If all direct methods fail, try html2canvas as fallback
-              if (!imageData && chartDiv) {
-                console.log('Falling back to html2canvas for PDF');
-                try {
-                  // Give it a little time for any animations to complete
-                  await new Promise(resolve => setTimeout(resolve, 500));
-                  
-                  // Use html2canvas to capture the chart
-                  const canvasPdf = await html2canvas(chartDiv as HTMLElement, {
-                    logging: true,
-                    useCORS: true,
-                    allowTaint: true,
-                    backgroundColor: null,
-                    scale: 2 // Higher quality
-                  });
-                  imageData = canvasPdf.toDataURL('image/png');
-                  console.log('Got image from html2canvas for PDF:', !!imageData, 'length:', imageData?.length);
-                } catch (e) {
-                  console.error('Error using html2canvas for PDF:', e);
-                }
-              }
-              
-              // If we have image data, replace the table with it
-              if (imageData && imageData.length > 100) {  // Basic validation of image data
-                // Find and replace the corresponding table in markdown
-                const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
-                const tableMatches = tempContent.match(tableRegex) || [];
-                console.log('Found table matches for PDF:', tableMatches.length);
-                
-                if (tableMatches[parseInt(tableIndex || '0')]) {
-                  const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                  
-                  // Create a nicely formatted markdown with the chart image
-                  // Add proper spacing but no chart type title
-                  const imageMarkdown = `
+      const response = await fetch('/api/documents/export', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId,
+          userId: user.id,
+          format,
+        }),
+      });
 
-![Chart](${imageData})
-
-`;
-                  
-                  tempContent = tempContent.replace(targetTable, imageMarkdown);
-                  console.log('Replaced table with image in markdown for PDF');
-                } else {
-                  console.log('Table match not found for index for PDF:', tableIndex);
-                }
-              } else {
-                console.log('Failed to get valid image data for PDF');
-              }
-            } catch (error) {
-              console.error('Error capturing chart for PDF:', error);
-            }
-          } else {
-            console.log('Chart not visible or not found for PDF');
-          }
-        }
-        contentToExport = tempContent;
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to export document');
       }
-      
-      console.log('Exporting to PDF');
-      await exportToPdf(contentToExport, `${documentTitle || 'research_document'}.pdf`);
-      console.log('PDF Export complete');
-    } catch (error) {
-      console.error('Error exporting to PDF:', error);
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `export-${documentId}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      // Update remaining exports count
+      if (!isSuperUser && remainingExports) {
+        setRemainingExports({
+          ...remainingExports,
+          remaining: remainingExports.remaining - 1
+        });
+      }
+
+      // Show success message (don't show remaining exports for fmbishu@gmail.com)
+      const message = user.email === 'fmbishu@gmail.com' 
+        ? 'Document exported successfully!' 
+        : `Document exported successfully! You have ${remainingExports?.remaining || 0} exports remaining.`;
+      alert(message);
+    } catch (error: any) {
+      console.error('Error exporting document:', error);
+      alert(error.message || 'Failed to export document');
     }
   };
 
@@ -672,6 +441,21 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
     }
   }, [renderedHtml, editMode, tables]);
 
+  useEffect(() => {
+    const fetchRemainingExports = async () => {
+      if (user) {
+        try {
+          const exports = await getRemainingExports(user.id);
+          setRemainingExports(exports);
+        } catch (error) {
+          console.error('Error fetching remaining exports:', error);
+        }
+      }
+    };
+
+    fetchRemainingExports();
+  }, [user]);
+
   if (isLoading) {
     return (
       <div className="p-8 flex flex-col items-center justify-center min-h-[300px]">
@@ -696,6 +480,11 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
             className="font-medium focus:outline-none focus:border-b focus:border-blue-500"
             placeholder="Document Title"
           />
+          {isSuperUser && (
+            <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full">
+              Super User
+            </span>
+          )}
         </div>
         <div className="flex space-x-2">
           <Tabs defaultValue={editMode ? "edit" : "preview"} className="w-auto">
@@ -797,8 +586,9 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
             <Button 
               variant="outline" 
               size="sm" 
-              onClick={handleExportPdf}
+              onClick={() => handleExport('pdf')}
               className="text-xs flex items-center"
+              disabled={!user || !documentId}
             >
               <Download className="h-3.5 w-3.5 mr-1" />
               PDF
@@ -806,8 +596,9 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
             <Button 
               variant="outline" 
               size="sm" 
-              onClick={handleExportDocx}
+              onClick={() => handleExport('docx')}
               className="text-xs flex items-center"
+              disabled={!user || !documentId}
             >
               <Download className="h-3.5 w-3.5 mr-1" />
               DOCX
@@ -837,6 +628,30 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
           dangerouslySetInnerHTML={{ __html: renderedHtml }}
         />
       )}
+      
+      <div className="flex justify-between items-center mt-4">
+        <div className="flex space-x-2">
+          <Button
+            onClick={() => handleExport('docx')}
+            disabled={isLoading}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            Export as DOCX
+          </Button>
+          <Button
+            onClick={() => handleExport('pdf')}
+            disabled={isLoading}
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            Export as PDF
+          </Button>
+        </div>
+        {!isSuperUser && remainingExports && (
+          <div className="text-sm text-gray-600">
+            {remainingExports.remaining} exports remaining
+          </div>
+        )}
+      </div>
     </div>
   );
 };

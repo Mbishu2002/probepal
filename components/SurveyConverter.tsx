@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Upload, FileText, Database, Eye, Download, Wand2, ChevronLeft, BarChart } from 'lucide-react';
