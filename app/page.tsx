@@ -94,18 +94,8 @@ export default function Home() {
     reader.readAsArrayBuffer(uploadedFile);
   };
 
-  const handleAddFile = () => {
-    // Create a file input element
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = '.xlsx,.xls,.csv';
-    fileInput.onchange = (e) => {
-      const files = (e.target as HTMLInputElement).files;
-      if (files && files.length > 0) {
-        handleFileUpload(files[0]);
-      }
-    };
-    fileInput.click();
+  const handleAddFile = (file: File) => {
+    handleFileUpload(file);
   };
 
   const handleSurveyFileUpload = (file: File) => {
@@ -180,12 +170,20 @@ export default function Home() {
   };
 
   const handleTabChange = (value: string) => {
-    setActiveTab(value);
-    // Reset survey converter state when switching tabs
+    // If switching to analysis mode and we have analysis data, ensure sidebar is visible
+    if (value === 'analysis' && activeFileId) {
+      setShowSidebar(true);
+      // Close mobile sidebar on small screens for clean layout
+      setMobileSidebarOpen(window.innerWidth >= 768);
+    }
+    
+    // Reset survey converter state when switching to survey tab
     if (value === 'survey') {
       setShowSurveyConverter(false);
       setSurveyFile(null);
     }
+    
+    setActiveTab(value);
   };
 
   const handleBackToSurveyLanding = () => {
@@ -259,16 +257,12 @@ export default function Home() {
               <LandingPage onFileUpload={handleAddFile} />
             ) : (
               <div className="relative flex flex-col md:flex-row h-screen overflow-hidden">
-                {/* Sidebar - hidden on mobile by default, shown when mobileSidebarOpen is true */}
+                {/* Static sidebar for analysis mode */}
                 <div className={`
-                  ${mobileSidebarOpen ? 'fixed inset-0 z-10' : 'hidden'} 
-                  md:relative md:block md:z-auto
+                  fixed inset-y-0 left-0 z-10 w-64 transition-all duration-300
+                  ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
                 `}>
-                  <div 
-                    className="absolute inset-0 bg-black/50 md:hidden" 
-                    onClick={() => setMobileSidebarOpen(false)}
-                  />
-                  <div className="relative z-20 h-full w-full max-w-[280px] md:w-64">
+                  <div className="h-full">
                     <Sidebar 
                       files={files}
                       activeFileId={activeFileId}
@@ -282,68 +276,78 @@ export default function Home() {
                   </div>
                 </div>
                 
-                {/* Main content area */}
-                <div className="flex-1 overflow-auto p-4 md:p-6">
-                  {generatedContent ? (
-                    <EditableMarkdown 
-                      content={generatedContent} 
-                      isLoading={isGenerating} 
-                    />
-                  ) : isGenerating ? (
-                    <div className="flex flex-col items-center justify-center h-full">
-                      <div className="text-center max-w-md">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4 mx-auto"></div>
-                        <h2 className="text-xl md:text-2xl font-bold mb-4">Generating Analysis</h2>
-                        <p className="text-gray-600">
-                          Please wait while we analyze your data...
-                        </p>
-                        <p className="text-sm text-gray-500 mt-4">
-                          This may take a moment depending on the size and complexity of your dataset.
-                        </p>
+                {/* Overlay for mobile sidebar */}
+                {mobileSidebarOpen && (
+                  <div 
+                    className="fixed inset-0 bg-black/50 z-[5] md:hidden" 
+                    onClick={() => setMobileSidebarOpen(false)}
+                  />
+                )}
+                
+                {/* Main content area with proper spacing for sidebar */}
+                <div className="flex-1 overflow-auto md:ml-64 transition-all duration-300">
+                  <div className="p-4 md:p-6">
+                    {generatedContent ? (
+                      <EditableMarkdown 
+                        content={generatedContent} 
+                        isLoading={isGenerating} 
+                      />
+                    ) : isGenerating ? (
+                      <div className="flex flex-col items-center justify-center h-full">
+                        <div className="text-center max-w-md">
+                          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4 mx-auto"></div>
+                          <h2 className="text-xl md:text-2xl font-bold mb-4">Generating Analysis</h2>
+                          <p className="text-gray-600">
+                            Please wait while we analyze your data...
+                          </p>
+                          <p className="text-sm text-gray-500 mt-4">
+                            This may take a moment depending on the size and complexity of your dataset.
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full">
-                      <div className="text-center max-w-md">
-                        <h2 className="text-xl md:text-2xl font-bold mb-4">Ready to Analyze</h2>
-                        
-                        {activeFileId && (
-                          <div className="mb-4">
-                            <div className="bg-white p-3 rounded-md border border-gray-200 shadow-sm">
-                              <div className="flex items-center space-x-2 mb-2">
-                                <File className="h-4 w-4 text-gray-400" />
-                                <span className="font-medium">
-                                  {files.find(file => file.id === activeFileId)?.name}
-                                </span>
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                {files.find(file => file.id === activeFileId)?.data.length} rows of data
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full">
+                        <div className="text-center max-w-md">
+                          <h2 className="text-xl md:text-2xl font-bold mb-4">Ready to Analyze</h2>
+                          
+                          {activeFileId && (
+                            <div className="mb-4">
+                              <div className="bg-white p-3 rounded-md border border-gray-200 shadow-sm">
+                                <div className="flex items-center space-x-2 mb-2">
+                                  <File className="h-4 w-4 text-gray-400" />
+                                  <span className="font-medium">
+                                    {files.find(file => file.id === activeFileId)?.name}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {files.find(file => file.id === activeFileId)?.data.length} rows of data
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        )}
-                        
-                        <p className="text-gray-600 mb-6">
-                          {activeFileId 
-                            ? "Click the 'Generate Analysis' button to start the analysis." 
-                            : "Select a file from the sidebar to analyze."}
-                        </p>
-                        
-                        {/* Show Generate button in mobile view */}
-                        {activeFileId && (
-                          <div className="md:hidden mt-4">
-                            <Button 
-                              onClick={handleGenerate} 
-                              disabled={isGenerating}
-                              className="w-full"
-                            >
-                              {isGenerating ? 'Generating...' : 'Generate Analysis'}
-                            </Button>
-                          </div>
-                        )}
+                          )}
+                          
+                          <p className="text-gray-600 mb-6">
+                            {activeFileId 
+                              ? "Click the 'Generate Analysis' button to start the analysis." 
+                              : "Select a file from the sidebar to analyze."}
+                          </p>
+                          
+                          {/* Show Generate button in mobile view */}
+                          {activeFileId && (
+                            <div className="md:hidden mt-4">
+                              <Button 
+                                onClick={handleGenerate} 
+                                disabled={isGenerating}
+                                className="w-full"
+                              >
+                                {isGenerating ? 'Generating...' : 'Generate Analysis'}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             )}

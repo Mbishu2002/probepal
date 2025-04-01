@@ -8,6 +8,16 @@ import { ChevronDown } from 'lucide-react';
 // Define available chart types
 type ChartType = 'ColumnChart' | 'BarChart' | 'LineChart' | 'AreaChart' | 'PieChart' | 'DonutChart' | 'ScatterChart' | 'ComboChart';
 
+// Extend the window interface for our chart storage
+declare global {
+  interface Window {
+    __chartInstances?: Array<{
+      chart: any;
+      getImageURI: (() => string | null) | null;
+    }>;
+  }
+}
+
 interface ChartTextStyle {
   fontSize?: number;
   bold?: boolean;
@@ -91,6 +101,7 @@ interface TableChartToggleProps {
   tableHtml: string;
   tableData: Array<Record<string, any>>;
   initialOptions?: ChartOptions;
+  onChartStateChange?: (isChart: boolean) => void;
 }
 
 // A4 dimensions in pixels at 96 DPI
@@ -186,7 +197,8 @@ const chartTypeOptions = [
 const TableChartToggle: React.FC<TableChartToggleProps> = ({ 
   tableHtml, 
   tableData,
-  initialOptions 
+  initialOptions,
+  onChartStateChange 
 }) => {
   const [showChart, setShowChart] = useState(false);
   const [chartType, setChartType] = useState<ChartType>('ColumnChart');
@@ -195,6 +207,10 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
   const [chartOptions, setChartOptions] = useState<ChartOptions>(
     initialOptions || DEFAULT_CHART_OPTIONS
   );
+  
+  // Add reference to store the chart wrapper and chart instance
+  const chartWrapperRef = useRef<any>(null);
+  const chartInstanceRef = useRef<any>(null);
 
   // Initialize columns and selected columns
   useEffect(() => {
@@ -211,6 +227,13 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
       updateChartOptions(chartType);
     }
   }, [chartType, selectedLabelColumn, selectedValueColumns]);
+
+  // Notify parent component of chart state changes
+  useEffect(() => {
+    if (onChartStateChange) {
+      onChartStateChange(showChart);
+    }
+  }, [showChart, onChartStateChange]);
 
   // Get data for the chart
   const getChartData = () => {
@@ -396,6 +419,27 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
     }
   };
 
+  // Add function to get chart image data
+  const getChartImageURI = (): string | null => {
+    try {
+      if (chartInstanceRef.current) {
+        return chartInstanceRef.current.getImageURI();
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting chart image URI:', error);
+      return null;
+    }
+  };
+
+  // Add to window object for debugging and external access
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).getChartImageURI = getChartImageURI;
+      (window as any).chartInstance = chartInstanceRef;
+    }
+  }, []);
+
   return (
     <div className="my-4 border rounded-lg overflow-hidden">
       <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
@@ -476,6 +520,109 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
                 height: undefined
               }}
               loader={<div>Loading Chart...</div>}
+              // Add callback to store chart instance
+              chartEvents={[
+                {
+                  eventName: 'ready',
+                  callback: ({ chartWrapper }) => {
+                    if (!chartWrapper) return;
+                    
+                    chartWrapperRef.current = chartWrapper;
+                    try {
+                      // Store the chart instance
+                      const chart = chartWrapper.getChart();
+                      chartInstanceRef.current = chart;
+                      console.log('Chart instance stored:', !!chart);
+                      
+                      // Store chart in window for direct access by export functions
+                      if (typeof window !== 'undefined') {
+                        // Check if charts array exists, create if not
+                        if (!window.__chartInstances) {
+                          window.__chartInstances = [];
+                        }
+                        
+                        // Push current chart to array
+                        window.__chartInstances.push({
+                          chart: chart,
+                          getImageURI: chart && typeof chart.getImageURI === 'function' ? 
+                            (() => chart.getImageURI()) : null
+                        });
+                        
+                        console.log('Chart stored in window.__chartInstances array, index:', 
+                                   window.__chartInstances.length - 1);
+                      }
+                      
+                      // Debug: Print the DOM structure around the chart
+                      console.log('Debug: Looking for chart container in DOM');
+                      
+                      // Find this chart container by walking up the DOM
+                      setTimeout(() => {
+                        try {
+                          // Try to get the chart's container element
+                          // Instead of using getContainer which doesn't exist, find it differently
+                          const containerId = chartWrapper.getContainerId();
+                          const container = document.getElementById(containerId);
+                          
+                          if (container) {
+                            console.log('Found container element:', container);
+                            
+                            // Walk up the DOM to find parent with className='p-4' or with data-table-index
+                            let element = container;
+                            let foundTableContainer = false;
+                            let maxTries = 10; // Prevent infinite loop
+                            
+                            while (element && maxTries > 0) {
+                              console.log('Checking element:', element.tagName, 
+                                         'classList:', element.className,
+                                         'parent:', element.parentElement?.tagName);
+                              
+                              if (element.className.includes('p-4')) {
+                                console.log('Found p-4 container:', element);
+                                element.setAttribute('data-has-chart', 'true');
+                                foundTableContainer = true;
+                                break;
+                              }
+                              
+                              if (element.hasAttribute('data-table-index')) {
+                                console.log('Found element with data-table-index:', element);
+                                element.setAttribute('data-has-chart', 'true');
+                                foundTableContainer = true;
+                                break;
+                              }
+                              
+                              // Go up the DOM
+                              if (element.parentElement) {
+                                element = element.parentElement;
+                              } else {
+                                break;
+                              }
+                              
+                              maxTries--;
+                            }
+                            
+                            if (foundTableContainer) {
+                              console.log('Successfully tagged container for export');
+                              
+                              // Store the chart instance on the element
+                              (element as any).__chartInstance = chart;
+                              (element as any).__chartIndex = window.__chartInstances?.length ? 
+                                window.__chartInstances.length - 1 : 0;
+                            } else {
+                              console.log('Could not find appropriate container to tag');
+                            }
+                          } else {
+                            console.log('No container found from chartWrapper');
+                          }
+                        } catch (e) {
+                          console.error('Error in DOM traversal:', e);
+                        }
+                      }, 500); // Give charts time to render
+                    } catch (e) {
+                      console.error('Failed to get chart from wrapper', e);
+                    }
+                  }
+                }
+              ]}
             />
           </div>
         ) : (

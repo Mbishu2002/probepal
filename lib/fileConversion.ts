@@ -1,4 +1,4 @@
-import { Document, Packer, Paragraph, Table, TableCell, TableRow, HeadingLevel, TextRun, ImageRun, BorderStyle } from 'docx';
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, HeadingLevel, TextRun, ImageRun, BorderStyle, Footer, PageNumber } from 'docx';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -32,17 +32,31 @@ async function getImageDimensions(base64Data: string): Promise<{width: number, h
 
 // Helper function to convert base64 to Uint8Array
 function base64ToUint8Array(base64: string): Uint8Array {
-  // Extract the base64 data part (remove the data:image/xxx;base64, prefix)
-  const base64Data = base64.split(',')[1];
-  const binaryString = window.atob(base64Data);
-  const length = binaryString.length;
-  const bytes = new Uint8Array(length);
-  
-  for (let i = 0; i < length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  // Remove header from base64 string if present
+  let b64 = base64;
+  if (base64.includes(',')) {
+    b64 = base64.split(',')[1];
   }
   
-  return bytes;
+  try {
+    // For larger images, use more efficient approach with Buffer
+    if (typeof Buffer !== 'undefined') {
+      return new Uint8Array(Buffer.from(b64, 'base64'));
+    }
+    
+    // Fallback for environments without Buffer
+    const binary_string = window.atob(b64);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary_string.charCodeAt(i);
+    }
+    return bytes;
+  } catch (error) {
+    console.error('Error converting base64 to Uint8Array:', error);
+    // Return an empty array on error
+    return new Uint8Array(0);
+  }
 }
 
 // Helper function to extract images from markdown
@@ -59,117 +73,231 @@ function extractImages(markdown: string): { markdown: string, images: { alt: str
   return { markdown, images };
 }
 
-// Helper function to get chart dimensions that fit A4
-function calculateChartDimensions(originalWidth: number, originalHeight: number) {
-  const availableWidth = A4_WIDTH_PT - (2 * MARGIN_PT);
-  const maxHeight = Math.min(A4_HEIGHT_PT / 2, availableWidth * 0.75); // Limit height to half page or 3/4 of width
+// Calculate dimensions for charts that fit properly in a document
+function calculateChartDimensions(originalWidth: number, originalHeight: number): {width: number, height: number} {
+  // For Word documents, we need to maintain specific dimensions
+  const maxWidth = 500;  // Maximum width for readability
+  const maxHeight = 400; // Maximum height to fit on a page
   
-  const aspectRatio = originalWidth / originalHeight;
-  let finalWidth = availableWidth;
-  let finalHeight = availableWidth / aspectRatio;
+  // Maintain aspect ratio
+  let width = Math.min(originalWidth, maxWidth);
+  let height = Math.round(width * (originalHeight / originalWidth));
   
-  // If height is too large, scale down while maintaining aspect ratio
-  if (finalHeight > maxHeight) {
-    finalHeight = maxHeight;
-    finalWidth = maxHeight * aspectRatio;
+  // If height is still too large, constrain by height instead
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = Math.round(height * (originalWidth / originalHeight));
   }
   
-  // Ensure width doesn't exceed available width
-  if (finalWidth > availableWidth) {
-    finalWidth = availableWidth;
-    finalHeight = availableWidth / aspectRatio;
-  }
+  return { width, height };
+}
+
+// In the cleanupMarkdown function:
+function cleanupMarkdown(markdown: string): string {
+  // Create placeholders for all HTML tags we want to preserve content from
+  const preserveTags: { tag: string, content: string }[] = [];
   
-  return {
-    width: Math.floor(finalWidth),
-    height: Math.floor(finalHeight)
-  };
+  // Process EDITABLE tags first (highest priority)
+  let processedMarkdown = markdown.replace(/<EDITABLE[^>]*>([\s\S]*?)<\/EDITABLE>/gi, (match, content) => {
+    const placeholder = `__PRESERVED_TAG_${preserveTags.length}__`;
+    preserveTags.push({ tag: 'EDITABLE', content });
+    return placeholder;
+  });
+  
+  // Process other common HTML tags that might contain important content
+  const commonTags = ['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'b', 'i', 'u', 'code'];
+  
+  commonTags.forEach(tag => {
+    const tagRegex = new RegExp(`<${tag}[^>]*>([\s\S]*?)<\/${tag}>`, 'gi');
+    processedMarkdown = processedMarkdown.replace(tagRegex, (match, content) => {
+      const placeholder = `__PRESERVED_TAG_${preserveTags.length}__`;
+      preserveTags.push({ tag, content });
+      return placeholder;
+    });
+  });
+  
+  // Now clean up the markdown with placeholders
+  let cleaned = processedMarkdown
+    // Remove HTML comments
+    .replace(/<!--[\s\S]*?-->/g, '')
+    // Clean up spacing issues
+    .replace(/\n{3,}/g, '\n\n')
+    // Remove any remaining HTML tags (but not our placeholders)
+    .replace(/<[^>]*>[\s\S]*?<\/[^>]*>/g, '')
+    .replace(/<[^>]*\/>/g, '')
+    // Ensure proper spacing around tables
+    .replace(/(\n\|[^\n]*\|[^\n]*\n)/g, '\n\n$1\n\n')
+    // Ensure proper spacing around images
+    .replace(/(\n!\[[^\]]*\]\([^\)]*\))/g, '\n\n$1\n\n')
+    // Clean up any double spacing we might have introduced
+    .replace(/\n{3,}/g, '\n\n');
+  
+  // Finally, restore all preserved content
+  preserveTags.forEach((item, index) => {
+    cleaned = cleaned.replace(`__PRESERVED_TAG_${index}__`, item.content);
+  });
+  
+  return cleaned;
 }
 
 // Helper function to process text formatting
 function processInlineFormatting(text: string): any[] {
   const runs: any[] = [];
-  let currentText = '';
-  let isBold = false;
-  let isItalic = false;
-  let isCode = false;
-
-  const addRun = () => {
-    if (currentText) {
-      runs.push(
-        new TextRun({
-          text: currentText.replace(/\*\*/g, '').replace(/\*/g, ''), // Remove remaining asterisks
-          bold: isBold,
-          italics: isItalic,
-          font: isCode ? 'Courier New' : 'Times New Roman',
-          size: 24 // 12pt font
-        })
-      );
-      currentText = '';
-    }
-  };
-
-  let i = 0;
-  while (i < text.length) {
-    // Check for double asterisks (bold)
-    if (text.substr(i, 2) === '**' && !isCode) {
-      addRun();
-      isBold = !isBold;
-      i += 2;
-      continue;
-    }
-    // Check for single asterisk (italic)
-    if (text[i] === '*' && !isCode && 
-        (i === 0 || text[i-1] !== '*') && 
-        (i === text.length-1 || text[i+1] !== '*')) {
-      addRun();
-      isItalic = !isItalic;
-      i++;
-      continue;
-    }
-    // Check for code
-    if (text[i] === '`') {
-      addRun();
-      isCode = !isCode;
-      i++;
-      continue;
-    }
-    currentText += text[i];
-    i++;
+  
+  // First, handle bold text (handle double asterisks)
+  const boldRegex = /\*\*(.*?)\*\*/g;
+  const boldMatches: {index: number, length: number, content: string}[] = [];
+  let boldMatch: RegExpExecArray | null;
+  
+  // Find all bold sections
+  while ((boldMatch = boldRegex.exec(text)) !== null) {
+    boldMatches.push({
+      index: boldMatch.index,
+      length: boldMatch[0].length,
+      content: boldMatch[1]
+    });
   }
-  addRun();
+  
+  // Find all italic sections (not inside bold)
+  const italicRegex = /\*([^*]+)\*/g;
+  const italicMatches: {index: number, length: number, content: string}[] = [];
+  let italicMatch: RegExpExecArray | null;
+  
+  while ((italicMatch = italicRegex.exec(text)) !== null) {
+    // Check if this italic is inside any bold match
+    const isInsideBold = boldMatches.some(boldMatch => 
+      italicMatch!.index > boldMatch.index && 
+      italicMatch!.index < boldMatch.index + boldMatch.length
+    );
+    
+    if (!isInsideBold) {
+      italicMatches.push({
+        index: italicMatch.index,
+        length: italicMatch[0].length,
+        content: italicMatch[1]
+      });
+    }
+  }
+  
+  // Find all code sections
+  const codeRegex = /`([^`]+)`/g;
+  const codeMatches: {index: number, length: number, content: string}[] = [];
+  let codeMatch: RegExpExecArray | null;
+  
+  while ((codeMatch = codeRegex.exec(text)) !== null) {
+    codeMatches.push({
+      index: codeMatch.index,
+      length: codeMatch[0].length,
+      content: codeMatch[1]
+    });
+  }
+  
+  // Combine all matches and sort by index
+  const allMatches = [...boldMatches, ...italicMatches, ...codeMatches].sort((a, b) => a.index - b.index);
+  
+  // If no formatting, return simple text run
+  if (allMatches.length === 0) {
+    if (text.trim()) {
+      return [new TextRun({ 
+        text: text,
+        size: 22,  // 11pt
+        font: 'Times New Roman'
+      })];
+    }
+    return [];
+  }
+  
+  // Process text with formatting
+  let lastIndex = 0;
+  
+  for (const match of allMatches) {
+    // Add any text before this match
+    if (match.index > lastIndex) {
+      const plainText = text.substring(lastIndex, match.index);
+      if (plainText) {
+        runs.push(new TextRun({ 
+          text: plainText,
+          size: 22,  // 11pt
+          font: 'Times New Roman'
+        }));
+      }
+    }
+    
+    // Add the formatted text
+    const isBold = boldMatches.some(m => m.index === match.index);
+    const isItalic = italicMatches.some(m => m.index === match.index);
+    const isCode = codeMatches.some(m => m.index === match.index);
+    
+    runs.push(
+      new TextRun({
+        text: match.content,
+        bold: isBold,
+        italics: isItalic,
+        font: isCode ? 'Courier New' : 'Times New Roman',
+        size: 22, // 11pt
+      })
+    );
+    
+    lastIndex = match.index + match.length;
+  }
+  
+  // Add any remaining text after the last match
+  if (lastIndex < text.length) {
+    const plainText = text.substring(lastIndex);
+    if (plainText) {
+      runs.push(new TextRun({ 
+        text: plainText,
+        size: 22,  // 11pt
+        font: 'Times New Roman'
+      }));
+    }
+  }
+  
   return runs;
 }
 
 // Helper function to process PDF text formatting
 function processPdfFormatting(text: string, doc: any): string {
+  // First, clean any HTML comments and tags
+  text = text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<[^>]*>[\s\S]*?<\/[^>]*>/g, '')
+    .replace(/<[^>]*\/>/g, '');
+
   const fontSize = 12;
   const lineHeight = 1.5;
   doc.setFontSize(fontSize);
   doc.setLineHeightFactor(lineHeight);
 
   // Process bold text (handle double asterisks)
+  let isBold = false;
   text = text.replace(/\*\*(.*?)\*\*/g, (match, content) => {
-    doc.setFont(doc.getFont().fontName, 'bold');
+    isBold = true;
+    doc.setFont('Times-Roman', 'bold');
     return content;
   });
 
   // Process italic text (handle single asterisks)
+  let isItalic = false;
   text = text.replace(/\*([^*]+)\*/g, (match, content) => {
-    doc.setFont(doc.getFont().fontName, 'italic');
+    isItalic = true;
+    doc.setFont('Times-Roman', 'italic');
     return content;
   });
 
   // Process code text
   text = text.replace(/`([^`]+)`/g, (match, content) => {
-    const currentFont = doc.getFont().fontName;
     doc.setFont('Courier');
     return content;
   });
 
   // Reset font to normal
-  doc.setFont(doc.getFont().fontName, 'normal');
-  return text.replace(/\*\*/g, '').replace(/\*/g, ''); // Remove any remaining asterisks
+  if (!isBold && !isItalic) {
+    doc.setFont('Times-Roman', 'normal');
+  }
+  
+  // Remove all remaining formatting characters
+  return text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '');
 }
 
 // Convert markdown to DOCX
@@ -194,24 +322,7 @@ export async function markdownToDocx(markdownText: string) {
         },
       },
       children: []
-    }],
-    styles: {
-      default: {
-        document: {
-          run: {
-            font: 'Times New Roman',
-            size: 24 // 12pt font
-          },
-          paragraph: {
-            spacing: {
-              line: 360, // 1.5 line spacing
-              before: 120,
-              after: 120
-            }
-          }
-        }
-      }
-    }
+    }]
   });
   
   const { markdown, images } = extractImages(markdownText);
@@ -252,6 +363,15 @@ export async function markdownToDocx(markdownText: string) {
           const dimensions = await getImageDimensions(src);
           const { width, height } = calculateChartDimensions(dimensions.width, dimensions.height);
           
+          // Add spacing before the image
+          paragraphs.push(new Paragraph({
+            spacing: {
+              before: 200,
+              after: 0
+            }
+          }));
+
+          // Add the image
           paragraphs.push(
             new Paragraph({
               children: [
@@ -265,15 +385,56 @@ export async function markdownToDocx(markdownText: string) {
               ],
               alignment: 'center',
               spacing: {
-                before: 200,
-                after: 200
+                before: 0,
+                after: 0
               }
             })
           );
+
+          // Add caption if alt text is provided and not just "Chart"
+          if (alt && alt !== 'Chart') {
+            paragraphs.push(
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: alt,
+                    italics: true,
+                    size: 20 // 10pt
+                  })
+                ],
+                alignment: 'center',
+                spacing: {
+                  before: 100,
+                  after: 200
+                }
+              })
+            );
+          } else {
+            // Add spacing after the image if no caption
+            paragraphs.push(new Paragraph({
+              spacing: {
+                before: 0,
+                after: 200
+              }
+            }));
+          }
         }
       } catch (error) {
         console.error('Error adding image to DOCX:', error);
-        paragraphs.push(new Paragraph({ text: `[Image: ${alt}]` }));
+        paragraphs.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `[Image: ${alt}]`,
+                italics: true
+              })
+            ],
+            spacing: {
+              before: 200,
+              after: 200
+            }
+          })
+        );
       }
       continue;
     }
@@ -402,219 +563,252 @@ export async function markdownToDocx(markdownText: string) {
 }
 
 // Convert markdown to PDF
-export async function markdownToPdf(markdownText: string) {
-  // First clean up the markdown text by removing editable tags
-  markdownText = markdownText.replace(/<EDITABLE[^>]*>([\s\S]*?)<\/EDITABLE>/g, '$1');
+export async function markdownToPdf(markdownText: string, outputFilename: string = 'document.pdf') {
+  // First clean up the markdown text
+  markdownText = cleanupMarkdown(markdownText);
 
   const doc = new jsPDF({
+    orientation: 'portrait',
     unit: 'pt',
-    format: 'a4',
-    putOnlyUsedFonts: true,
-    floatPrecision: 16
+    format: 'a4'
   });
 
-  // Set default font to Times New Roman
-  doc.setFont('times', 'normal');
+  // Set better default font
+  doc.setFont('Helvetica');
+  doc.setFontSize(11);
   
-  // Set default line height
-  (doc as any).setLineHeightFactor(1.5);
-  
+  // Set initial position
+  let yPos = MARGIN_PT;
+  const maxWidth = A4_WIDTH_PT - (2 * MARGIN_PT);
+
+  // Extract images from markdown
   const { markdown, images } = extractImages(markdownText);
   const lines = markdown.split('\n');
-  let yPos = MARGIN_PT;
-  let contentSections: {type: string, content: string}[] = [];
+  let inTable = false;
+  let tableData: string[][] = [];
+  const filename = outputFilename;
+  
+  // Add document title
+  doc.setFontSize(18);
+  doc.setFont('Helvetica', 'bold');
+  const title = 'Research Document';
+  const titleWidth = doc.getTextWidth(title);
+  doc.text(title, (A4_WIDTH_PT - titleWidth) / 2, yPos + 20);
+  yPos += 60;
+  
+  // Reset font for body content
+  doc.setFontSize(11);
+  doc.setFont('Helvetica', 'normal');
 
-  // First pass: organize content into sections
+  // Process the markdown line by line
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+    const line = lines[i];
+    const trimmedLine = line.trim();
     
-    // Check for images
-    if (line.match(/!\[(.*?)\]\((.*?)\)/)) {
-      contentSections.push({type: 'image', content: line});
-    } 
-    // Check for tables
-    else if (line.startsWith('|')) {
-      let tableContent = line;
-      let j = i + 1;
-      while (j < lines.length && (lines[j].trim().startsWith('|') || !lines[j].trim())) {
-        tableContent += '\n' + lines[j];
-        j++;
-      }
-      contentSections.push({type: 'table', content: tableContent});
-      i = j - 1; // Skip processed lines
+    if (!trimmedLine) {
+      yPos += 20; // Add some spacing between paragraphs
+      continue;
     }
-    // Everything else (text, headings, etc.)
-    else {
-      contentSections.push({type: 'text', content: line});
-    }
-  }
 
-  // Second pass: render content
-  for (const section of contentSections) {
-    if (section.type === 'image') {
-      const imageMatch = section.content.match(/!\[(.*?)\]\((.*?)\)/);
-      if (imageMatch) {
-        const [fullMatch, alt, src] = imageMatch;
-        try {
-          if (src.startsWith('data:image')) {
-            // Calculate dimensions that fit within margins
-            const availableWidth = A4_WIDTH_PT - (2 * MARGIN_PT);
-            const availableHeight = A4_HEIGHT_PT - (2 * MARGIN_PT);
-            
-            // Get original image dimensions
-            const dimensions = await getImageDimensions(src);
-            const { width, height } = calculateChartDimensions(dimensions.width, dimensions.height);
-            
-            // Check if we need a new page
-            if (yPos + height > A4_HEIGHT_PT - MARGIN_PT) {
-              doc.addPage();
-              yPos = MARGIN_PT;
-            }
-            
-            // Center the image
-            const xPos = MARGIN_PT + (availableWidth - width) / 2;
-            
-            doc.addImage(src, 'AUTO', xPos, yPos, width, height);
-            yPos += height + 20;
-          }
-        } catch (error) {
-          console.error('Error adding image to PDF:', error);
-          doc.setFontSize(12);
-          doc.text(`[Image: ${alt}]`, MARGIN_PT, yPos);
-          yPos += 20;
-        }
-      }
-    } 
-    else if (section.type === 'table') {
-      // Handle tables
-      const tableLines = section.content.split('\n').filter(l => l.trim() !== '');
-      if (tableLines.length >= 2) {
-        const headers = tableLines[0]
-          .split('|')
-          .filter(cell => cell.trim() !== '')
-          .map(cell => cell.trim());
-        
-        const data: string[][] = [];
-        for (let i = 2; i < tableLines.length; i++) {
-          const rowCells = tableLines[i]
-            .split('|')
-            .filter(cell => cell.trim() !== '')
-            .map(cell => cell.trim());
-          
-          if (rowCells.length === headers.length) {
-            data.push(rowCells);
-          }
-        }
-        
-        // Check if we need a new page
-        if (yPos > 200) { // Leave more space for tables
-          doc.addPage();
-          yPos = 20;
-        }
-        
-        // @ts-ignore - jspdf-autotable types
-        doc.autoTable({
-          startY: yPos,
-          head: [headers],
-          body: data,
-          theme: 'grid',
-          styles: { fontSize: 10 },
-          headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0] },
-        });
-        
-        // Update yPos based on table height
-        // @ts-ignore - jspdf-autotable types
-        const finalY = (doc as any).lastAutoTable.finalY || yPos + 10;
-        yPos = finalY + 10;
-      }
-    }
-    else {
-      // Handle text content
-      const line = section.content;
+    // Handle headings
+    if (trimmedLine.startsWith('# ')) {
+      // Heading 1
+      doc.setFontSize(16);
+      doc.setFont('Helvetica', 'bold');
+      const headingText = trimmedLine.substring(2);
       
-      // Handle headings with proper spacing
-      if (line.startsWith('# ')) {
-        const headingText = line.substring(2);
-        doc.setFontSize(24); // 24pt for H1
-        doc.setFont(doc.getFont().fontName, 'bold');
-        const textLines = doc.splitTextToSize(headingText, A4_WIDTH_PT - (2 * MARGIN_PT));
-        doc.text(textLines, MARGIN_PT, yPos);
-        yPos += textLines.length * 36; // 1.5 times the font size
-        yPos += 24; // Additional spacing after heading
-      } else if (line.startsWith('## ')) {
-        const headingText = line.substring(3);
-        doc.setFontSize(20); // 20pt for H2
-        doc.setFont(doc.getFont().fontName, 'bold');
-        const textLines = doc.splitTextToSize(headingText, A4_WIDTH_PT - (2 * MARGIN_PT));
-        doc.text(textLines, MARGIN_PT, yPos);
-        yPos += textLines.length * 30; // 1.5 times the font size
-        yPos += 20; // Additional spacing after heading
-      } else if (line.startsWith('### ')) {
-        const headingText = line.substring(4);
-        doc.setFontSize(16); // 16pt for H3
-        doc.setFont(doc.getFont().fontName, 'bold');
-        const textLines = doc.splitTextToSize(headingText, A4_WIDTH_PT - (2 * MARGIN_PT));
-        doc.text(textLines, MARGIN_PT, yPos);
-        yPos += textLines.length * 24; // 1.5 times the font size
-        yPos += 16; // Additional spacing after heading
-      } else if (line.startsWith('- ') || line.startsWith('* ')) {
-        const bulletText = processPdfFormatting(line.substring(2), doc);
-        doc.setFontSize(12);
-        doc.setFont(doc.getFont().fontName, 'normal');
-        const textLines = doc.splitTextToSize(bulletText, A4_WIDTH_PT - (2 * MARGIN_PT) - 20);
-        textLines.forEach((line: string, index: number) => {
-          if (index === 0) {
-            doc.text('\u2022', MARGIN_PT, yPos);
-          }
-          doc.text(line, MARGIN_PT + 20, yPos);
-          yPos += 18; // 1.5 times the font size
-        });
-        yPos += 6; // Additional spacing after bullet point
-      } else if (/^\d+\.\s/.test(line)) {
-        const numberMatch = line.match(/^(\d+)\.\s(.*)/);
-        if (numberMatch) {
-          const formattedText = processPdfFormatting(numberMatch[2], doc);
-          doc.setFontSize(12);
-          doc.setFont(doc.getFont().fontName, 'normal');
-          const textLines = doc.splitTextToSize(formattedText, A4_WIDTH_PT - (2 * MARGIN_PT) - 20);
-          textLines.forEach((line: string, index: number) => {
-            if (index === 0) {
-              doc.text(`${numberMatch[1]}.`, MARGIN_PT, yPos);
-            }
-            doc.text(line, MARGIN_PT + 20, yPos);
-            yPos += 18; // 1.5 times the font size
-          });
-          yPos += 6; // Additional spacing after numbered item
-        }
-      } else {
-        if (!line.startsWith('<!--')) {
-          const formattedText = processPdfFormatting(line, doc);
-          doc.setFontSize(12);
-          doc.setFont(doc.getFont().fontName, 'normal');
+      // Check if we need a new page
+      if (yPos + 30 > A4_HEIGHT_PT - MARGIN_PT) {
+        doc.addPage();
+        yPos = MARGIN_PT;
+      }
+      
+      doc.text(headingText, MARGIN_PT, yPos + 16);
+      yPos += 40; // More spacing after a heading
+      
+      // Reset font
+      doc.setFontSize(11);
+      doc.setFont('Helvetica', 'normal');
+      continue;
+    } else if (trimmedLine.startsWith('## ')) {
+      // Heading 2
+      doc.setFontSize(14);
+      doc.setFont('Helvetica', 'bold');
+      const headingText = trimmedLine.substring(3);
+      
+      // Check if we need a new page
+      if (yPos + 30 > A4_HEIGHT_PT - MARGIN_PT) {
+        doc.addPage();
+        yPos = MARGIN_PT;
+      }
+      
+      doc.text(headingText, MARGIN_PT, yPos + 16);
+      yPos += 35; // Spacing after a heading
+      
+      // Reset font
+      doc.setFontSize(11);
+      doc.setFont('Helvetica', 'normal');
+      continue;
+    } else if (trimmedLine.startsWith('### ')) {
+      // Heading 3
+      doc.setFontSize(12);
+      doc.setFont('Helvetica', 'bold');
+      const headingText = trimmedLine.substring(4);
+      
+      // Check if we need a new page
+      if (yPos + 30 > A4_HEIGHT_PT - MARGIN_PT) {
+        doc.addPage();
+        yPos = MARGIN_PT;
+      }
+      
+      doc.text(headingText, MARGIN_PT, yPos + 16);
+      yPos += 30; // Spacing after a heading
+      
+      // Reset font
+      doc.setFontSize(11);
+      doc.setFont('Helvetica', 'normal');
+      continue;
+    }
+
+    // Handle images (including charts)
+    const imageMatch = trimmedLine.match(/!\[(.*?)\]\((.*?)\)/);
+    if (imageMatch) {
+      const [fullMatch, alt, src] = imageMatch;
+      try {
+        if (src.startsWith('data:image')) {
+          // Get image dimensions
+          const dimensions = await getImageDimensions(src);
           
-          const textLines = doc.splitTextToSize(formattedText, A4_WIDTH_PT - (2 * MARGIN_PT));
-          textLines.forEach((line: string) => {
-            doc.text(line, MARGIN_PT, yPos);
-            yPos += 18; // 1.5 times the font size
-          });
+          // Calculate dimensions that fit the page
+          const { width, height } = calculateChartDimensions(dimensions.width, dimensions.height);
           
-          // Add paragraph spacing
-          if (textLines.length > 0) {
-            yPos += 12; // Additional spacing between paragraphs
+          // Add some spacing before the image
+          yPos += 30;
+          
+          // Check if we need a new page
+          if (yPos + height > A4_HEIGHT_PT - MARGIN_PT) {
+            doc.addPage();
+            yPos = MARGIN_PT + 20;
           }
+          
+          // Center the image
+          const xPos = (A4_WIDTH_PT - width) / 2;
+          
+          // Add the image
+          doc.addImage(src, 'PNG', xPos, yPos, width, height);
+          
+          // Add caption with the chart type if provided in alt text
+          if (alt && alt !== 'Chart') {
+            yPos += height + 15;
+            doc.setFontSize(10);
+            doc.setFont('Helvetica', 'italic');
+            const captionWidth = doc.getTextWidth(alt);
+            doc.text(alt, (A4_WIDTH_PT - captionWidth) / 2, yPos);
+            yPos += 25;
+          } else {
+            yPos += height + 30;
+          }
+          
+          // Reset font
+          doc.setFontSize(11);
+          doc.setFont('Helvetica', 'normal');
+          
+          continue;
         }
+      } catch (error) {
+        console.error('Error processing image:', error);
       }
     }
-    
-    // Check if we need a new page
-    if (yPos > A4_HEIGHT_PT - MARGIN_PT) {
-      doc.addPage();
-      yPos = MARGIN_PT;
+
+    // Handle tables with better formatting
+    if (trimmedLine.startsWith('|')) {
+      if (!inTable) {
+        inTable = true;
+        tableData = [];
+      }
+      
+      const cells = trimmedLine
+        .split('|')
+        .filter(cell => cell.trim() !== '')
+        .map(cell => cell.trim());
+      
+      if (cells.length > 0) {
+        tableData.push(cells);
+      }
+    } else if (inTable) {
+      inTable = false;
+      
+      if (tableData.length > 0) {
+        // Check if we need a new page for the table
+        const tableHeight = tableData.length * 30; // Approximate height per row
+        if (yPos + tableHeight > A4_HEIGHT_PT - MARGIN_PT) {
+          doc.addPage();
+          yPos = MARGIN_PT;
+        }
+        
+        // Add the table with improved styling
+        (doc as any).autoTable({
+          startY: yPos,
+          head: [tableData[0]],
+          body: tableData.slice(2), // Skip separator row
+          theme: 'grid',
+          styles: {
+            fontSize: 10,
+            cellPadding: 5,
+            overflow: 'linebreak',
+            halign: 'left',
+            valign: 'middle',
+            lineColor: [120, 120, 120],
+            lineWidth: 0.25
+          },
+          headStyles: {
+            fillColor: [60, 60, 60],
+            textColor: 255,
+            fontStyle: 'bold',
+            halign: 'center'
+          },
+          alternateRowStyles: {
+            fillColor: [245, 245, 245]
+          },
+          margin: { left: MARGIN_PT, right: MARGIN_PT },
+          tableWidth: 'auto'
+        });
+        
+        // Update yPos after the table
+        yPos = (doc as any).lastAutoTable.finalY + 20;
+      }
+    } else {
+      // Handle regular text with better formatting
+      // Support for bold, italic, etc.
+      const processedText = processPdfFormatting(trimmedLine, doc);
+      
+      // Split text into lines that fit the page width
+      const lines = doc.splitTextToSize(processedText, maxWidth);
+      
+      // Check if we need a new page
+      const textHeight = lines.length * 15; // Approximate height per line
+      if (yPos + textHeight > A4_HEIGHT_PT - MARGIN_PT) {
+        doc.addPage();
+        yPos = MARGIN_PT;
+      }
+      
+      // Add the text
+      doc.text(lines, MARGIN_PT, yPos + 12);
+      yPos += textHeight + 12;
     }
   }
 
-  return doc;
+  // Add page numbers
+  const pageCount = (doc as any).internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(10);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Page ${i} of ${pageCount}`, A4_WIDTH_PT - 90, A4_HEIGHT_PT - 20);
+  }
+  
+  // Save the PDF
+  doc.save(outputFilename);
 }
 
 // Export to DOCX
@@ -636,10 +830,10 @@ export async function exportToDocx(markdownText: string, filename: string = 'doc
 // Export to PDF
 export async function exportToPdf(markdownText: string, filename: string = 'document.pdf') {
   try {
-    const doc = await markdownToPdf(markdownText);
-    doc.save(filename);
+    await markdownToPdf(markdownText, filename);
   } catch (error) {
-    console.error('Error creating PDF:', error);
+    console.error('Error exporting to PDF:', error);
     alert('Failed to export to PDF. Please try again.');
   }
 }
+

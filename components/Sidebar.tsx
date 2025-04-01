@@ -34,17 +34,15 @@ const Sidebar: React.FC<SidebarProps> = ({
   onModelChange 
 }) => {
   return (
-    <div className="w-full md:w-64 bg-white border-r border-gray-200 h-full p-4 flex flex-col overflow-y-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="w-full md:w-64 bg-white border-r border-gray-200 h-full flex flex-col overflow-y-auto p-0 pt-0 pb-0 pl-0">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200">
         <div className="flex items-center space-x-2">
           <Database className="h-5 w-5 text-blue-600" />
           <h2 className="text-lg font-semibold">Data Analysis</h2>
         </div>
       </div>
       
-      <Separator className="mb-4" />
-      
-      <div className="mb-6">
+      <div className="p-4">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-medium text-gray-500">Documents</h3>
           <Button variant="ghost" size="sm" onClick={onAddFile} title="Add new document">
@@ -83,12 +81,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
       
-      <div className="mb-6">
+      <div className="p-4 border-t border-gray-200">
         <h3 className="text-sm font-medium text-gray-500 mb-2">AI Model</h3>
         <ModelSelector onModelChange={onModelChange} />
       </div>
       
-      <div className="mt-auto">
+      <div className="mt-auto p-4 border-t border-gray-200">
         <Button 
           onClick={onGenerate} 
           disabled={isGenerating || files.length === 0 || !activeFileId}

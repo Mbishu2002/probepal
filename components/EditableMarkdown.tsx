@@ -11,9 +11,22 @@ import { exportToDocx, exportToPdf } from '../lib/fileConversion';
 import { Button } from './ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Separator } from './ui/separator';
-import { FileText, Download, Edit2, Eye } from 'lucide-react';
+import { FileText, Download, Edit2, Eye, Search, X } from 'lucide-react';
 import TableChartToggle from './TableChartToggle';
 import * as ReactDOM from 'react-dom/client';
+import html2canvas from 'html2canvas';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+
+// Extend the window interface for our chart storage
+declare global {
+  interface Window {
+    __chartInstances?: Array<{
+      chart: any;
+      getImageURI: (() => string | null) | null;
+    }>;
+  }
+}
 
 interface EditableMarkdownProps {
   content: string;
@@ -33,6 +46,14 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   const [tables, setTables] = useState<{html: string, data: any[], options?: any}[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   
+  // Find and replace state
+  const [findText, setFindText] = useState<string>('');
+  const [replaceText, setReplaceText] = useState<string>('');
+  const [isFindDialogOpen, setIsFindDialogOpen] = useState<boolean>(false);
+  const [matchCount, setMatchCount] = useState<number>(0);
+  const [currentMatch, setCurrentMatch] = useState<number>(0);
+  const [matches, setMatches] = useState<number[]>([]);
+  
   // Process markdown content when it changes
   useEffect(() => {
     setEditableContent(content);
@@ -45,6 +66,131 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
       renderMarkdown(editableContent);
     }
   }, [editableContent, editMode]);
+
+  // Highlight find matches in editor
+  useEffect(() => {
+    if (findText && editMode && textareaRef.current) {
+      highlightMatches();
+    }
+  }, [findText, editMode, editableContent]);
+
+  // Find all occurrences of a string in text
+  const findAllOccurrences = (text: string, searchStr: string): number[] => {
+    if (!searchStr) return [];
+    
+    const positions: number[] = [];
+    let pos = text.indexOf(searchStr);
+    
+    while (pos !== -1) {
+      positions.push(pos);
+      pos = text.indexOf(searchStr, pos + 1);
+    }
+    
+    return positions;
+  };
+
+  // Highlight matches in the textarea
+  const highlightMatches = () => {
+    if (!textareaRef.current || !findText) return;
+    
+    const positions = findAllOccurrences(editableContent, findText);
+    setMatches(positions);
+    setMatchCount(positions.length);
+    
+    if (positions.length > 0) {
+      // Set current match if needed
+      if (currentMatch >= positions.length) {
+        setCurrentMatch(0);
+      }
+      
+      // Focus and select the current match
+      const start = positions[currentMatch];
+      const end = start + findText.length;
+      
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(start, end);
+      
+      // Scroll the textarea to the selection
+      const textarea = textareaRef.current;
+      const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
+      const currentLineNumber = (textarea.value.substring(0, start).match(/\n/g) || []).length;
+      textarea.scrollTop = lineHeight * currentLineNumber;
+    }
+  };
+
+  // Go to next match
+  const findNext = () => {
+    if (matches.length === 0) return;
+    
+    const nextMatch = (currentMatch + 1) % matches.length;
+    setCurrentMatch(nextMatch);
+    highlightMatches();
+  };
+
+  // Go to previous match
+  const findPrevious = () => {
+    if (matches.length === 0) return;
+    
+    const prevMatch = (currentMatch - 1 + matches.length) % matches.length;
+    setCurrentMatch(prevMatch);
+    highlightMatches();
+  };
+
+  // Replace current match
+  const replaceCurrent = () => {
+    if (matches.length === 0 || !textareaRef.current) return;
+    
+    const startPos = matches[currentMatch];
+    const endPos = startPos + findText.length;
+    
+    const newContent = 
+      editableContent.substring(0, startPos) + 
+      replaceText + 
+      editableContent.substring(endPos);
+    
+    setEditableContent(newContent);
+    
+    // Update matches after replacing
+    setTimeout(() => {
+      const newMatches = findAllOccurrences(newContent, findText);
+      setMatches(newMatches);
+      setMatchCount(newMatches.length);
+      
+      // Adjust current match if needed
+      if (currentMatch >= newMatches.length) {
+        setCurrentMatch(Math.max(0, newMatches.length - 1));
+      }
+      
+      // Select next match or reset selection
+      if (newMatches.length > 0) {
+        highlightMatches();
+      } else {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(startPos + replaceText.length, startPos + replaceText.length);
+      }
+      
+      if (onContentChange) {
+        onContentChange(newContent);
+      }
+    }, 0);
+  };
+
+  // Replace all matches
+  const replaceAll = () => {
+    if (findText === '') return;
+    
+    const newContent = editableContent.split(findText).join(replaceText);
+    setEditableContent(newContent);
+    
+    if (onContentChange) {
+      onContentChange(newContent);
+    }
+    
+    // Reset matches
+    setMatches([]);
+    setMatchCount(0);
+    setCurrentMatch(0);
+  };
 
   // Extract tables from markdown
   const extractTables = (markdown: string) => {
@@ -184,102 +330,146 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
       
       // Find all table containers
       const tableContainers = document.querySelectorAll('[data-table-index]');
+      console.log('Found table containers:', tableContainers.length);
+      
       if (tableContainers.length > 0) {
         let tempContent = editableContent;
         
         for (let i = 0; i < tableContainers.length; i++) {
           const container = tableContainers[i] as HTMLElement;
           const tableIndex = container.getAttribute('data-table-index');
+          console.log(`Processing container ${i}, table index:`, tableIndex);
           
-          // Check if the chart is visible - look for the chart toggle state
-          const tableElement = container.querySelector('.min-w-full');
-          const chartWrapper = container.querySelector('.google-visualization-chartWrapper');
+          // Check if this container has a chart that's being displayed
+          const hasChart = container.getAttribute('data-has-chart') === 'true';
+          console.log('Container has been tagged with data-has-chart:', hasChart);
           
-          // If chart wrapper exists and table is hidden, export the chart
-          if (chartWrapper && 
-              (tableElement === null || 
-               window.getComputedStyle(tableElement).display === 'none' || 
-               window.getComputedStyle(chartWrapper).display !== 'none')) {
-            
-            // Get chart type from select
-            const chartTypeSelect = container.querySelector('select');
-            const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
-            
+          // Look for any chart-related elements
+          const chartDiv = container.querySelector('.flex.justify-center.items-center');
+          console.log('Found chart div with flex classes:', !!chartDiv);
+          
+          // If we have a potential chart container, try to capture it
+          if (hasChart || (chartDiv && window.getComputedStyle(chartDiv).display !== 'none')) {
             try {
-              // Get the chart SVG element
-              const chartSvg = container.querySelector('svg');
-              if (chartSvg) {
-                // Create a canvas element
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Set canvas dimensions to match SVG
-                const svgRect = chartSvg.getBoundingClientRect();
-                canvas.width = svgRect.width;
-                canvas.height = svgRect.height;
-                
-                // Create an image from the SVG
-                const svgData = new XMLSerializer().serializeToString(chartSvg);
-                const img = new Image();
-                
-                // Wait for the image to load before drawing to canvas
-                await new Promise((resolve) => {
-                  img.onload = resolve;
-                  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-                });
-                
-                // Draw the image to canvas
-                ctx?.drawImage(img, 0, 0);
-                
-                // Convert canvas to base64 image
-                const imageData = canvas.toDataURL('image/png');
-                
+              console.log('Attempting to capture chart');
+              
+              // Get chart type from select
+              const chartTypeSelect = container.querySelector('select');
+              const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+              console.log('Chart title:', chartTitle);
+              
+              // Try different approaches to get the chart image
+              let imageData: string | null = null;
+              
+              // 1. First check for chartInstance reference directly on container or chart div
+              if (hasChart && (container as any).__chartInstance) {
+                try {
+                  const chart = (container as any).__chartInstance;
+                  if (chart && typeof chart.getImageURI === 'function') {
+                    imageData = chart.getImageURI();
+                    console.log('Got image from container.__chartInstance:', !!imageData);
+                  }
+                } catch (e) {
+                  console.error('Error getting image from container.__chartInstance:', e);
+                }
+              }
+              
+              // 2. Check for chartIndex reference and lookup in window.__chartInstances
+              if (!imageData && (container as any).__chartIndex !== undefined && window.__chartInstances) {
+                try {
+                  const chartIndex = (container as any).__chartIndex;
+                  const chartData = window.__chartInstances[chartIndex];
+                  if (chartData && chartData.getImageURI) {
+                    imageData = chartData.getImageURI();
+                    console.log(`Got image from window.__chartInstances[${chartIndex}]:`, !!imageData);
+                  }
+                } catch (e) {
+                  console.error('Error getting image from window.__chartInstances:', e);
+                }
+              }
+              
+              // 3. If still no image, try to find a visible chart in this container
+              if (!imageData && chartDiv) {
+                try {
+                  // Look for all possible chart elements
+                  const visCharts = chartDiv.querySelectorAll('div[dir="ltr"]');
+                  console.log('Found possible chart elements:', visCharts.length);
+                  
+                  // Try to find one with a getImageURI method
+                  for (let j = 0; j < visCharts.length; j++) {
+                    const el = visCharts[j] as any;
+                    if (el.__chartInstance && typeof el.__chartInstance.getImageURI === 'function') {
+                      imageData = el.__chartInstance.getImageURI();
+                      console.log(`Got image from visCharts[${j}].__chartInstance:`, !!imageData);
+                      break;
+                    }
+                  }
+                } catch (e) {
+                  console.error('Error finding chart elements:', e);
+                }
+              }
+              
+              // 4. If all direct methods fail, try html2canvas as fallback
+              if (!imageData && chartDiv) {
+                console.log('Falling back to html2canvas');
+                try {
+                  // Give it a little time for any animations to complete
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  
+                  // Use html2canvas to capture the chart
+                  const canvasDocx = await html2canvas(chartDiv as HTMLElement, {
+                    logging: true,
+                    useCORS: true,
+                    allowTaint: true,
+                    backgroundColor: null,
+                    scale: 2 // Higher quality
+                  });
+                  imageData = canvasDocx.toDataURL('image/png');
+                  console.log('Got image from html2canvas:', !!imageData, 'length:', imageData?.length);
+                } catch (e) {
+                  console.error('Error using html2canvas:', e);
+                }
+              }
+              
+              // If we have image data, replace the table with it
+              if (imageData && imageData.length > 100) {  // Basic validation of image data
                 // Find and replace the corresponding table in markdown
                 const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
                 const tableMatches = tempContent.match(tableRegex) || [];
+                console.log('Found table matches:', tableMatches.length);
                 
                 if (tableMatches[parseInt(tableIndex || '0')]) {
                   const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                  // Add proper spacing before and after the chart
-                  const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
+                  
+                  // Create a nicely formatted markdown with the chart image
+                  // Add proper spacing but no chart type title
+                  const imageMarkdown = `
+
+![Chart](${imageData})
+
+`;
+                  
                   tempContent = tempContent.replace(targetTable, imageMarkdown);
+                  console.log('Replaced table with image in markdown');
+                } else {
+                  console.log('Table match not found for index:', tableIndex);
                 }
               } else {
-                // Fallback to using the chart container if SVG is not available
-                const chartContainer = container.querySelector('.google-visualization-chartWrapper');
-                if (chartContainer) {
-                  // Use html2canvas as fallback
-                  const html2canvas = await import('html2canvas');
-                  const canvas = await html2canvas.default(chartContainer as HTMLElement, {
-                    scale: 2, // Higher scale for better quality
-                    backgroundColor: '#ffffff',
-                    logging: false
-                  });
-                  
-                  // Convert canvas to base64 image
-                  const imageData = canvas.toDataURL('image/png');
-                  
-                  // Find and replace the corresponding table in markdown
-                  const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
-                  const tableMatches = tempContent.match(tableRegex) || [];
-                  
-                  if (tableMatches[parseInt(tableIndex || '0')]) {
-                    const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                    // Add proper spacing before and after the chart
-                    const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
-                    tempContent = tempContent.replace(targetTable, imageMarkdown);
-                  }
-                }
+                console.log('Failed to get valid image data');
               }
             } catch (error) {
               console.error('Error capturing chart:', error);
             }
+          } else {
+            console.log('Chart not visible or not found');
           }
         }
         contentToExport = tempContent;
       }
       
+      console.log('Exporting to DOCX');
       await exportToDocx(contentToExport, `${documentTitle || 'research_document'}.docx`);
+      console.log('Export complete');
     } catch (error) {
       console.error('Error exporting to DOCX:', error);
     }
@@ -291,102 +481,146 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
       
       // Find all table containers
       const tableContainers = document.querySelectorAll('[data-table-index]');
+      console.log('Found table containers for PDF:', tableContainers.length);
+      
       if (tableContainers.length > 0) {
         let tempContent = editableContent;
         
         for (let i = 0; i < tableContainers.length; i++) {
           const container = tableContainers[i] as HTMLElement;
           const tableIndex = container.getAttribute('data-table-index');
+          console.log(`Processing container ${i} for PDF, table index:`, tableIndex);
           
-          // Check if the chart is visible - look for the chart toggle state
-          const tableElement = container.querySelector('.min-w-full');
-          const chartWrapper = container.querySelector('.google-visualization-chartWrapper');
+          // Check if this container has a chart that's being displayed
+          const hasChart = container.getAttribute('data-has-chart') === 'true';
+          console.log('Container has been tagged with data-has-chart for PDF:', hasChart);
           
-          // If chart wrapper exists and table is hidden, export the chart
-          if (chartWrapper && 
-              (tableElement === null || 
-               window.getComputedStyle(tableElement).display === 'none' || 
-               window.getComputedStyle(chartWrapper).display !== 'none')) {
-            
-            // Get chart type from select
-            const chartTypeSelect = container.querySelector('select');
-            const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
-            
+          // Look for any chart-related elements
+          const chartDiv = container.querySelector('.flex.justify-center.items-center');
+          console.log('Found chart div with flex classes for PDF:', !!chartDiv);
+          
+          // If we have a potential chart container, try to capture it
+          if (hasChart || (chartDiv && window.getComputedStyle(chartDiv).display !== 'none')) {
             try {
-              // Get the chart SVG element
-              const chartSvg = container.querySelector('svg');
-              if (chartSvg) {
-                // Create a canvas element
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Set canvas dimensions to match SVG
-                const svgRect = chartSvg.getBoundingClientRect();
-                canvas.width = svgRect.width;
-                canvas.height = svgRect.height;
-                
-                // Create an image from the SVG
-                const svgData = new XMLSerializer().serializeToString(chartSvg);
-                const img = new Image();
-                
-                // Wait for the image to load before drawing to canvas
-                await new Promise((resolve) => {
-                  img.onload = resolve;
-                  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
-                });
-                
-                // Draw the image to canvas
-                ctx?.drawImage(img, 0, 0);
-                
-                // Convert canvas to base64 image
-                const imageData = canvas.toDataURL('image/png');
-                
+              console.log('Attempting to capture chart for PDF');
+              
+              // Get chart type from select
+              const chartTypeSelect = container.querySelector('select');
+              const chartTitle = chartTypeSelect ? chartTypeSelect.value : 'Chart';
+              console.log('Chart title for PDF:', chartTitle);
+              
+              // Try different approaches to get the chart image
+              let imageData: string | null = null;
+              
+              // 1. First check for chartInstance reference directly on container or chart div
+              if (hasChart && (container as any).__chartInstance) {
+                try {
+                  const chart = (container as any).__chartInstance;
+                  if (chart && typeof chart.getImageURI === 'function') {
+                    imageData = chart.getImageURI();
+                    console.log('Got image from container.__chartInstance for PDF:', !!imageData);
+                  }
+                } catch (e) {
+                  console.error('Error getting image from container.__chartInstance for PDF:', e);
+                }
+              }
+              
+              // 2. Check for chartIndex reference and lookup in window.__chartInstances
+              if (!imageData && (container as any).__chartIndex !== undefined && window.__chartInstances) {
+                try {
+                  const chartIndex = (container as any).__chartIndex;
+                  const chartData = window.__chartInstances[chartIndex];
+                  if (chartData && chartData.getImageURI) {
+                    imageData = chartData.getImageURI();
+                    console.log(`Got image from window.__chartInstances[${chartIndex}] for PDF:`, !!imageData);
+                  }
+                } catch (e) {
+                  console.error('Error getting image from window.__chartInstances for PDF:', e);
+                }
+              }
+              
+              // 3. If still no image, try to find a visible chart in this container
+              if (!imageData && chartDiv) {
+                try {
+                  // Look for all possible chart elements
+                  const visCharts = chartDiv.querySelectorAll('div[dir="ltr"]');
+                  console.log('Found possible chart elements for PDF:', visCharts.length);
+                  
+                  // Try to find one with a getImageURI method
+                  for (let j = 0; j < visCharts.length; j++) {
+                    const el = visCharts[j] as any;
+                    if (el.__chartInstance && typeof el.__chartInstance.getImageURI === 'function') {
+                      imageData = el.__chartInstance.getImageURI();
+                      console.log(`Got image from visCharts[${j}].__chartInstance for PDF:`, !!imageData);
+                      break;
+                    }
+                  }
+                } catch (e) {
+                  console.error('Error finding chart elements for PDF:', e);
+                }
+              }
+              
+              // 4. If all direct methods fail, try html2canvas as fallback
+              if (!imageData && chartDiv) {
+                console.log('Falling back to html2canvas for PDF');
+                try {
+                  // Give it a little time for any animations to complete
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  
+                  // Use html2canvas to capture the chart
+                  const canvasPdf = await html2canvas(chartDiv as HTMLElement, {
+                    logging: true,
+                    useCORS: true,
+                    allowTaint: true,
+                    backgroundColor: null,
+                    scale: 2 // Higher quality
+                  });
+                  imageData = canvasPdf.toDataURL('image/png');
+                  console.log('Got image from html2canvas for PDF:', !!imageData, 'length:', imageData?.length);
+                } catch (e) {
+                  console.error('Error using html2canvas for PDF:', e);
+                }
+              }
+              
+              // If we have image data, replace the table with it
+              if (imageData && imageData.length > 100) {  // Basic validation of image data
                 // Find and replace the corresponding table in markdown
                 const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
                 const tableMatches = tempContent.match(tableRegex) || [];
+                console.log('Found table matches for PDF:', tableMatches.length);
                 
                 if (tableMatches[parseInt(tableIndex || '0')]) {
                   const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                  // Add proper spacing before and after the chart
-                  const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
+                  
+                  // Create a nicely formatted markdown with the chart image
+                  // Add proper spacing but no chart type title
+                  const imageMarkdown = `
+
+![Chart](${imageData})
+
+`;
+                  
                   tempContent = tempContent.replace(targetTable, imageMarkdown);
+                  console.log('Replaced table with image in markdown for PDF');
+                } else {
+                  console.log('Table match not found for index for PDF:', tableIndex);
                 }
               } else {
-                // Fallback to using the chart container if SVG is not available
-                const chartContainer = container.querySelector('.google-visualization-chartWrapper');
-                if (chartContainer) {
-                  // Use html2canvas as fallback
-                  const html2canvas = await import('html2canvas');
-                  const canvas = await html2canvas.default(chartContainer as HTMLElement, {
-                    scale: 2, // Higher scale for better quality
-                    backgroundColor: '#ffffff',
-                    logging: false
-                  });
-                  
-                  // Convert canvas to base64 image
-                  const imageData = canvas.toDataURL('image/png');
-                  
-                  // Find and replace the corresponding table in markdown
-                  const tableRegex = /\|[^\n]*\|[^\n]*\n\|[\s:-]*\|[\s:-]*\|[\s\S]*?(?=\n\n|$)/g;
-                  const tableMatches = tempContent.match(tableRegex) || [];
-                  
-                  if (tableMatches[parseInt(tableIndex || '0')]) {
-                    const targetTable = tableMatches[parseInt(tableIndex || '0')];
-                    // Add proper spacing before and after the chart
-                    const imageMarkdown = `\n\n![${chartTitle}](${imageData})\n\n`;
-                    tempContent = tempContent.replace(targetTable, imageMarkdown);
-                  }
-                }
+                console.log('Failed to get valid image data for PDF');
               }
             } catch (error) {
-              console.error('Error capturing chart:', error);
+              console.error('Error capturing chart for PDF:', error);
             }
+          } else {
+            console.log('Chart not visible or not found for PDF');
           }
         }
         contentToExport = tempContent;
       }
       
+      console.log('Exporting to PDF');
       await exportToPdf(contentToExport, `${documentTitle || 'research_document'}.pdf`);
+      console.log('PDF Export complete');
     } catch (error) {
       console.error('Error exporting to PDF:', error);
     }
@@ -485,6 +719,81 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
             </TabsList>
           </Tabs>
           <div className="flex space-x-1">
+            {editMode && (
+              <Dialog open={isFindDialogOpen} onOpenChange={setIsFindDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="text-xs flex items-center"
+                  >
+                    <Search className="h-3.5 w-3.5 mr-1" />
+                    Find & Replace
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Find and Replace</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4 pt-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          placeholder="Find text..."
+                          value={findText}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFindText(e.target.value)}
+                          className="flex-1"
+                        />
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={findPrevious}
+                          disabled={matchCount === 0}
+                        >
+                          Previous
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={findNext}
+                          disabled={matchCount === 0}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        {matchCount > 0 ? `Match ${currentMatch + 1} of ${matchCount}` : 'No matches found'}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Input
+                        placeholder="Replace with..."
+                        value={replaceText}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setReplaceText(e.target.value)}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={replaceCurrent}
+                          disabled={matchCount === 0}
+                        >
+                          Replace
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="default" 
+                          onClick={replaceAll}
+                          disabled={matchCount === 0}
+                        >
+                          Replace All
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
             <Button 
               variant="outline" 
               size="sm" 
@@ -512,7 +821,13 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
           <textarea
             ref={textareaRef}
             value={editableContent}
-            onChange={(e) => setEditableContent(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+              const newContent = e.target.value;
+              setEditableContent(newContent);
+              if (onContentChange) {
+                onContentChange(newContent);
+              }
+            }}
             className="w-full min-h-[500px] focus:outline-none resize-none"
           />
         </div>
