@@ -545,7 +545,14 @@ const TableChartToggle: React.FC<TableChartToggleProps> = ({
                         window.__chartInstances.push({
                           chart: chart,
                           getImageURI: chart && typeof chart.getImageURI === 'function' ? 
-                            (() => chart.getImageURI()) : null
+                            ((): string | null => {
+                              try {
+                                const uri = chart.getImageURI();
+                                return typeof uri === 'string' ? uri : null;
+                              } catch (e) {
+                                return null;
+                              }
+                            }) : null
                         });
                         
                         console.log('Chart stored in window.__chartInstances array, index:', 

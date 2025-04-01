@@ -19,6 +19,7 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
   const [loading, setLoading] = useState(false);
   const { signIn, signUp } = useAuth();
   const router = useRouter();
+  const [currentMode, setCurrentMode] = useState<'signin' | 'signup' | 'forgot'>(mode);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -30,21 +31,21 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
     const password = formData.get('password') as string;
 
     try {
-      if (mode === 'signup') {
+      if (currentMode === 'signup') {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         alert('Sign up successful! Please check your email to verify your account.');
-        setMode('signin');
-      } else if (mode === 'signin') {
+        setCurrentMode('signin');
+      } else if (currentMode === 'signin') {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         alert('Successfully logged in!');
         router.push('/');
-      } else if (mode === 'forgot') {
+      } else if (currentMode === 'forgot') {
         const { error } = await supabase.auth.resetPasswordForEmail(email);
         if (error) throw error;
         alert('Password reset link has been sent to your email!');
-        setMode('signin');
+        setCurrentMode('signin');
       }
     } catch (error: any) {
       alert(error.message);
@@ -57,12 +58,12 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
     <div className="w-full max-w-md mx-auto p-6">
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold text-gray-900">
-          {mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Reset Password'}
+          {currentMode === 'signin' ? 'Sign In' : currentMode === 'signup' ? 'Create Account' : 'Reset Password'}
         </h2>
         <p className="mt-2 text-sm text-gray-600">
-          {mode === 'signin' 
+          {currentMode === 'signin' 
             ? "Don't have an account? Sign up" 
-            : mode === 'signup' ? "Already have an account? Sign in" : "Already have an account? Sign in"}
+            : currentMode === 'signup' ? "Already have an account? Sign in" : "Already have an account? Sign in"}
         </p>
       </div>
 
@@ -81,7 +82,7 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
           />
         </div>
 
-        {mode !== 'forgot' && (
+        {currentMode !== 'forgot' && (
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700">
               Password
@@ -112,9 +113,9 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
             <div className="flex items-center justify-center">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
             </div>
-          ) : mode === 'signin' ? (
+          ) : currentMode === 'signin' ? (
             'Sign In'
-          ) : mode === 'signup' ? (
+          ) : currentMode === 'signup' ? (
             'Sign Up'
           ) : (
             'Send Reset Link'
@@ -122,18 +123,18 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
         </Button>
 
         <div className="text-center space-y-2">
-          {mode === 'signin' ? (
+          {currentMode === 'signin' ? (
             <>
               <button
                 type="button"
-                onClick={() => setMode('signup')}
+                onClick={() => setCurrentMode('signup')}
                 className="text-sm text-blue-600 hover:text-blue-500"
               >
                 Need an account? Sign up
               </button>
               <button
                 type="button"
-                onClick={() => setMode('forgot')}
+                onClick={() => setCurrentMode('forgot')}
                 className="block w-full text-sm text-blue-600 hover:text-blue-500"
               >
                 Forgot password?
@@ -142,7 +143,7 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
           ) : (
             <button
               type="button"
-              onClick={() => setMode('signin')}
+              onClick={() => setCurrentMode('signin')}
               className="text-sm text-blue-600 hover:text-blue-500"
             >
               Already have an account? Sign in
@@ -152,4 +153,4 @@ export default function AuthForm({ mode, onSuccess }: AuthFormProps) {
       </form>
     </div>
   );
-} 
+}
