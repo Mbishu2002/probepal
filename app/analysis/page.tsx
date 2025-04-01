@@ -118,6 +118,23 @@ export default function AnalysisPage() {
     setSelectedModel(model);
   };
 
+  const handleAddFile = () => {
+    const newFile: FileItem = {
+      id: Date.now().toString(),
+      name: `New File ${files.length + 1}`,
+      data: []
+    };
+    setFiles([...files, newFile]);
+    setActiveFileId(newFile.id);
+  };
+
+  const handleRemoveFile = (fileId: string) => {
+    setFiles(files.filter(file => file.id !== fileId));
+    if (activeFileId === fileId) {
+      setActiveFileId(files.length > 0 ? files[0].id : null);
+    }
+  };
+
   const toggleMobileSidebar = () => {
     setMobileSidebarOpen(!mobileSidebarOpen);
   };
@@ -174,6 +191,8 @@ export default function AnalysisPage() {
                 onGenerate={handleGenerate}
                 isGenerating={isGenerating}
                 onModelChange={handleModelChange}
+                onAddFile={handleAddFile}
+                onRemoveFile={handleRemoveFile}
               />
             </div>
           </div>
