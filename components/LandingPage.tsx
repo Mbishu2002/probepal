@@ -6,20 +6,36 @@ import { Button } from '@/components/ui/button';
 import SurveyConverter from './SurveyConverter';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSubscription } from '@/contexts/SubscriptionContext';
+import { SUBSCRIPTION_PLANS } from '@/lib/subscription';
 import UserDropdown from '@/components/ui/UserDropdown';
 
-interface LandingPageProps {
-  onFileUpload?: (file: File) => void;
-}
-
-export default function LandingPage({ onFileUpload }: LandingPageProps) {
+export default function LandingPage() {
   const router = useRouter();
   const { user } = useAuth();
+  const { subscription, initializePayment } = useSubscription();
   const excelFileInputRef = useRef<HTMLInputElement>(null);
   const surveyFileInputRef = useRef<HTMLInputElement>(null);
   const [surveyFile, setSurveyFile] = useState<File | null>(null);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+  const handleUpgrade = async (plan: string) => {
+    try {
+      setIsProcessingPayment(true);
+      const paymentUrl = await initializePayment(plan);
+      window.location.href = paymentUrl;
+    } catch (error) {
+      console.error('Error initializing payment:', error);
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
 
   const handleExcelUploadClick = () => {
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
     excelFileInputRef.current?.click();
   };
 
@@ -30,7 +46,10 @@ export default function LandingPage({ onFileUpload }: LandingPageProps) {
   const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      router.push('/analysis');
+      // Create a URL for the file
+      const fileUrl = URL.createObjectURL(file);
+      // Navigate to analysis page with the file data
+      router.push(`/analysis?file=${encodeURIComponent(fileUrl)}`);
     }
   };
 
@@ -62,7 +81,16 @@ export default function LandingPage({ onFileUpload }: LandingPageProps) {
               >
                 Pricing
               </Button>
-              
+              {user && (!subscription || subscription?.plan_name === 'Free') && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push('/pricing')}
+                  className="text-gray-600 hover:text-blue-600"
+                >
+                  Upgrade
+                </Button>
+              )}
               {user ? (
                 <UserDropdown />
               ) : (

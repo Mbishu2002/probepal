@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSubscription } from '@/contexts/SubscriptionContext';
 import { Button } from '@/components/ui/button';
 import { Check, ChevronLeft } from 'lucide-react';
 import { initiateSubscription } from '@/lib/subscription';
@@ -47,8 +48,27 @@ const SUBSCRIPTION_PLANS = [
 
 export default function PricingPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const { subscription, initializePayment } = useSubscription();
   const [isLoading, setIsLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/auth');
+    }
+  }, [authLoading, user, router]);
+
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   const handleSubscribe = async (plan: typeof SUBSCRIPTION_PLANS[0]) => {
     if (!user) {
@@ -67,14 +87,8 @@ export default function PricingPage() {
       }
 
       // Handle paid plan subscription
-      const response = await initiateSubscription(user.id, plan.name);
-      
-      if (response.success) {
-        // Redirect to payment page or handle payment flow
-        window.location.href = response.paymentUrl;
-      } else {
-        alert('Failed to initiate subscription. Please try again.');
-      }
+      const paymentUrl = await initializePayment(plan.name);
+      window.location.href = paymentUrl;
     } catch (error) {
       console.error('Subscription error:', error);
       alert('An error occurred. Please try again.');
@@ -102,16 +116,20 @@ export default function PricingPage() {
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             Choose Your Plan
           </h1>
-          <p className="text-xl text-gray-600">
-            Select the perfect plan for your research needs
-          </p>
+          {subscription && (
+            <p className="text-xl text-gray-600">
+              Your current plan: <span className="font-semibold">{subscription.plan_name}</span>
+            </p>
+          )}
         </div>
 
         <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
           {SUBSCRIPTION_PLANS.map((plan) => (
             <div
               key={plan.name}
-              className="bg-white rounded-xl shadow-lg p-8 hover:shadow-xl transition-shadow"
+              className={`bg-white rounded-xl shadow-lg p-8 hover:shadow-xl transition-shadow ${
+                subscription?.plan_name === plan.name ? 'ring-2 ring-blue-500' : ''
+              }`}
             >
               <div className="text-center mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">
@@ -144,16 +162,22 @@ export default function PricingPage() {
 
               <Button
                 onClick={() => handleSubscribe(plan)}
-                disabled={isLoading === plan.name}
+                disabled={isLoading === plan.name || subscription?.plan_name === plan.name}
                 className={`w-full ${
-                  plan.name === 'Pro'
+                  subscription?.plan_name === plan.name
+                    ? 'bg-gray-300 cursor-not-allowed'
+                    : plan.name === 'Pro'
                     ? 'bg-blue-600 hover:bg-blue-700'
                     : plan.name === 'Basic'
                     ? 'bg-purple-600 hover:bg-purple-700'
                     : 'bg-gray-600 hover:bg-gray-700'
                 } text-white`}
               >
-                {isLoading === plan.name ? 'Processing...' : 'Subscribe Now'}
+                {isLoading === plan.name
+                  ? 'Processing...'
+                  : subscription?.plan_name === plan.name
+                  ? 'Current Plan'
+                  : 'Subscribe Now'}
               </Button>
             </div>
           ))}

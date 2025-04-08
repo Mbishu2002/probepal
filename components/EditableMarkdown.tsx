@@ -18,7 +18,7 @@ import html2canvas from 'html2canvas';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
-import { trackDocumentExport, getRemainingExports } from '@/lib/subscription';
+import { useSubscription } from '@/contexts/SubscriptionContext';
 import { useRouter } from 'next/navigation';
 
 // Extend the window interface for our chart storage
@@ -37,6 +37,7 @@ interface EditableMarkdownProps {
   onContentChange?: (content: string) => void;
   documentId?: string;
   isSuperUser?: boolean;
+  onExport?: (documentId: string) => Promise<boolean>;
 }
 
 const EditableMarkdown: React.FC<EditableMarkdownProps> = ({ 
@@ -44,15 +45,18 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   isLoading,
   onContentChange,
   documentId,
-  isSuperUser 
+  isSuperUser,
+  onExport
 }) => {
   const router = useRouter();
   const { user } = useAuth();
+  const { remainingExports, isUnlimited, trackDocumentExport } = useSubscription();
   const [documentTitle, setDocumentTitle] = useState<string>('Research Results');
   const [editMode, setEditMode] = useState<boolean>(false);
   const [editableContent, setEditableContent] = useState<string>(content);
   const [renderedHtml, setRenderedHtml] = useState<string>('');
   const [tables, setTables] = useState<{html: string, data: any[], options?: any}[]>([]);
+  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   
   // Find and replace state
@@ -62,8 +66,6 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   const [matchCount, setMatchCount] = useState<number>(0);
   const [currentMatch, setCurrentMatch] = useState<number>(0);
   const [matches, setMatches] = useState<number[]>([]);
-  
-  const [remainingExports, setRemainingExports] = useState<{ remaining: number; plan: string } | null>(null);
 
   // Process markdown content when it changes
   useEffect(() => {
@@ -294,11 +296,11 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
       setTables(extractedTables);
       
       const result = await unified()
-        .use(remarkParse) // Parse markdown to mdast
-        .use(remarkGfm) // Support GFM (tables, autolinks, etc.)
-        .use(remarkRehype) // Convert mdast to hast
-        .use(rehypeSanitize) // Sanitize HTML
-        .use(rehypeStringify) // Convert hast to HTML
+        .use(remarkParse)
+        .use(remarkGfm)
+        .use(remarkRehype)
+        .use(rehypeSanitize)
+        .use(rehypeStringify)
         .process(markdownContent);
       
       let html = String(result);
@@ -336,62 +338,34 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   };
 
   const handleExport = async (format: 'docx' | 'pdf') => {
-    if (!user) {
+    if (!user || !documentId) {
       router.push('/auth');
       return;
     }
 
-    // Check if user has remaining exports, bypass for fmbishu@gmail.com
-    if (user.email !== 'fmbishu@gmail.com' && remainingExports?.remaining === 0) {
-      alert('You have reached your export limit. Please upgrade your plan to continue exporting.');
-      router.push('/pricing');
-      return;
-    }
-
     try {
-      const response = await fetch('/api/documents/export', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          documentId,
-          userId: user.id,
-          format,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to export document');
+      // Track the export
+      const canExport = await trackDocumentExport(documentId);
+      if (!canExport && !isUnlimited) {
+        setMessage({ type: 'error', text: 'You have no exports remaining. Please upgrade your plan.' });
+        return;
       }
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `export-${documentId}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      // Update remaining exports count
-      if (!isSuperUser && remainingExports) {
-        setRemainingExports({
-          ...remainingExports,
-          remaining: remainingExports.remaining - 1
-        });
+      if (format === 'docx') {
+        await exportToDocx(editableContent, `${documentTitle || 'document'}.docx`);
+      } else if (format === 'pdf') {
+        await exportToPdf(editableContent, `${documentTitle || 'document'}.pdf`);
       }
 
-      // Show success message (don't show remaining exports for fmbishu@gmail.com)
-      const message = user.email === 'fmbishu@gmail.com' 
-        ? 'Document exported successfully!' 
-        : `Document exported successfully! You have ${remainingExports?.remaining || 0} exports remaining.`;
-      alert(message);
+      setMessage({ type: 'success', text: 'Document exported successfully!' });
+      
+      // Clear message after 3 seconds
+      setTimeout(() => {
+        setMessage(null);
+      }, 3000);
     } catch (error: any) {
       console.error('Error exporting document:', error);
-      alert(error.message || 'Failed to export document');
+      setMessage({ type: 'error', text: error.message || 'Failed to export document' });
     }
   };
 
@@ -406,55 +380,53 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
   // Replace table placeholders with actual TableChartToggle components
   useEffect(() => {
     if (renderedHtml && !editMode) {
-      // Find all table placeholders and replace them with the actual tables
-      const placeholders = document.querySelectorAll('[id^="table-placeholder-"]');
-      placeholders.forEach((placeholder, index) => {
-        const table = tables[index];
-        if (table) {
-          // Get chart options if they exist
-          const chartOptions = placeholder.getAttribute('data-chart-options');
-          const options = chartOptions ? JSON.parse(chartOptions) : undefined;
-          
-          // Create a container for the table and chart
-          const container = document.createElement('div');
-          container.className = 'my-4';
-          container.setAttribute('data-table-index', index.toString());
-          
-          // Add the chart toggle component
-          const chartToggle = document.createElement('div');
-          container.appendChild(chartToggle);
-          
-          // Replace the placeholder with our container
-          placeholder.replaceWith(container);
-          
-          // Render the TableChartToggle component
-          const root = ReactDOM.createRoot(chartToggle);
-          root.render(
-            <TableChartToggle
-              tableHtml={table.html}
-              tableData={table.data}
-              initialOptions={options}
-            />
-          );
-        }
-      });
+      // Small delay to ensure DOM is ready
+      const timer = setTimeout(() => {
+        // Find all table placeholders and replace them with the actual tables
+        const placeholders = document.querySelectorAll('[id^="table-placeholder-"]');
+        placeholders.forEach((placeholder, index) => {
+          const table = tables[index];
+          if (table) {
+            // Get chart options if they exist
+            const chartOptions = placeholder.getAttribute('data-chart-options');
+            const options = chartOptions ? JSON.parse(chartOptions) : undefined;
+            
+            // Create a container for the table and chart
+            const container = document.createElement('div');
+            container.className = 'my-4';
+            container.setAttribute('data-table-index', index.toString());
+            
+            // Add the chart toggle component
+            const chartToggle = document.createElement('div');
+            container.appendChild(chartToggle);
+            
+            // Replace the placeholder with our container
+            placeholder.replaceWith(container);
+            
+            // Render the TableChartToggle component
+            const root = ReactDOM.createRoot(chartToggle);
+            root.render(
+              <TableChartToggle
+                tableHtml={table.html}
+                tableData={table.data}
+                initialOptions={options}
+              />
+            );
+          }
+        });
+      }, 100); // Small delay to ensure DOM is ready
+
+      return () => clearTimeout(timer);
     }
   }, [renderedHtml, editMode, tables]);
 
+  // Add a new effect to re-render tables when switching modes
   useEffect(() => {
-    const fetchRemainingExports = async () => {
-      if (user) {
-        try {
-          const exports = await getRemainingExports(user.id);
-          setRemainingExports(exports);
-        } catch (error) {
-          console.error('Error fetching remaining exports:', error);
-        }
-      }
-    };
-
-    fetchRemainingExports();
-  }, [user]);
+    if (!editMode) {
+      // Force a re-render of the markdown content when switching to preview mode
+      renderMarkdown(editableContent);
+    }
+  }, [editMode]);
 
   if (isLoading) {
     return (
@@ -588,7 +560,7 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
               size="sm" 
               onClick={() => handleExport('pdf')}
               className="text-xs flex items-center"
-              disabled={!user || !documentId}
+              disabled={!user || !documentId || (!isUnlimited && remainingExports <= 0)}
             >
               <Download className="h-3.5 w-3.5 mr-1" />
               PDF
@@ -598,7 +570,7 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
               size="sm" 
               onClick={() => handleExport('docx')}
               className="text-xs flex items-center"
-              disabled={!user || !documentId}
+              disabled={!user || !documentId || (!isUnlimited && remainingExports <= 0)}
             >
               <Download className="h-3.5 w-3.5 mr-1" />
               DOCX
@@ -629,29 +601,19 @@ const EditableMarkdown: React.FC<EditableMarkdownProps> = ({
         />
       )}
       
-      <div className="flex justify-between items-center mt-4">
-        <div className="flex space-x-2">
-          <Button
-            onClick={() => handleExport('docx')}
-            disabled={isLoading}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
-          >
-            Export as DOCX
-          </Button>
-          <Button
-            onClick={() => handleExport('pdf')}
-            disabled={isLoading}
-            className="bg-purple-600 hover:bg-purple-700 text-white"
-          >
-            Export as PDF
-          </Button>
+      {!isSuperUser && remainingExports && (
+        <div className="p-4 border-t border-gray-200 text-sm text-gray-600">
+          {remainingExports} exports remaining
         </div>
-        {!isSuperUser && remainingExports && (
-          <div className="text-sm text-gray-600">
-            {remainingExports.remaining} exports remaining
-          </div>
-        )}
-      </div>
+      )}
+      
+      {message && (
+        <div className={`fixed bottom-4 right-4 p-4 rounded-lg shadow-lg ${
+          message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+        }`}>
+          {message.text}
+        </div>
+      )}
     </div>
   );
 };

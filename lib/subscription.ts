@@ -13,29 +13,30 @@ export const SUBSCRIPTION_PLANS: Record<string, SubscriptionPlan> = {
     price: 0,
     documents: 0,
     features: [
-      'View and analyze documents',
-      'Basic data visualization',
-      'Survey data collection'
+      'Basic document viewing',
+      'Limited export capabilities',
+      'Community support'
     ]
   },
   basic: {
     name: 'Basic',
     price: 5000,
-    documents: 3,
+    documents: 5,
     features: [
-      'Everything in Free',
-      '3 document exports',
-      'Advanced visualizations'
+      '5 document exports per month',
+      'Advanced analysis features',
+      'Email support'
     ]
   },
   pro: {
     name: 'Pro',
     price: 15000,
-    documents: 10,
+    documents: 20,
     features: [
-      'Everything in Basic',
-      '10 document exports',
-      'Priority support'
+      '20 document exports per month',
+      'Priority support',
+      'Advanced analytics',
+      'API access'
     ]
   }
 };
@@ -45,8 +46,20 @@ const SUPER_USER_EMAIL = 'fmbishu@gmail.com';
 
 export async function initiateSubscription(userId: string, plan: string) {
   try {
+    // Map plan names to their corresponding keys
+    const planMap: Record<string, string> = {
+      'Free': 'free',
+      'Basic': 'basic',
+      'Pro': 'pro'
+    };
+
+    const planKey = planMap[plan];
+    if (!planKey) {
+      throw new Error('Invalid plan selected');
+    }
+
     // Get the selected plan
-    const selectedPlan = SUBSCRIPTION_PLANS[plan];
+    const selectedPlan = SUBSCRIPTION_PLANS[planKey];
     if (!selectedPlan) {
       throw new Error('Invalid plan selected');
     }
@@ -57,11 +70,9 @@ export async function initiateSubscription(userId: string, plan: string) {
       .insert([
         {
           user_id: userId,
-          plan: selectedPlan.name,
-          price: selectedPlan.price,
-          documents_remaining: selectedPlan.documents,
-          status: 'pending',
-          created_at: new Date().toISOString()
+          plan_name: selectedPlan.name,
+          status: 'active',
+          payment_reference: null
         }
       ])
       .select()
@@ -71,26 +82,7 @@ export async function initiateSubscription(userId: string, plan: string) {
       throw subscriptionError;
     }
 
-    // Initialize Campay payment
-    const response = await fetch('/api/payments/initiate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        amount: selectedPlan.price,
-        currency: 'XAF',
-        subscriptionId: subscription.id,
-        userId: userId
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to initiate payment');
-    }
-
-    const paymentData = await response.json();
-    return paymentData;
+    return { success: true, subscription };
   } catch (error) {
     console.error('Error initiating subscription:', error);
     throw error;

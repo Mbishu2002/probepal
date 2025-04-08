@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { trackDocumentExport } from '@/lib/subscription';
+// import { trackDocumentExport } from '@/lib/subscription';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -11,8 +11,8 @@ export async function POST(request: Request) {
   try {
     const { documentId, userId } = await request.json();
 
-    // Track the export
-    await trackDocumentExport(userId, documentId);
+    // Bypass tracking for now
+    // await trackDocumentExport(userId, documentId);
 
     // Get the document data
     const { data: document, error: documentError } = await supabase

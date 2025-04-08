@@ -52,7 +52,7 @@ async function callGeminiAPI(systemPrompt: string, data?: any[]) {
       tableStr += `\nTotal rows in dataset: ${data.length}\n`;
       tableStr += `\nFull dataset: ${JSON.stringify(data, null, 2)}\n\n`;
       
-      fullPrompt = `${tableStr}\n\n${systemPrompt}\n\nMake sure to include at least one properly formatted markdown table in your analysis. The table should use the | and - characters for formatting.`;
+      fullPrompt = `${tableStr}\n\n${systemPrompt}\n\n`;
     }
 
     const response = await axios.post(
