@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Sidebar from '@/components/Sidebar';
 import EditableMarkdown from '@/components/EditableMarkdown';
 import { Button } from '@/components/ui/button';
-import { ChevronLeft, Menu } from 'lucide-react';
+import { ChevronLeft, Menu, X } from 'lucide-react';
 import { getRemainingExports } from '@/lib/subscription';
 import { supabase } from '@/lib/supabase';
 import UserDropdown from '@/components/ui/UserDropdown';
@@ -32,6 +32,7 @@ export default function AnalysisPage() {
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [isSuperUser, setIsSuperUser] = useState<boolean>(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Fetch system prompt on component mount
   useEffect(() => {
@@ -271,16 +272,35 @@ export default function AnalysisPage() {
       <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => router.push('/')}
-              className="text-gray-600 hover:text-gray-900 flex items-center"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Back to Home
-            </Button>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push('/')}
+                className="text-gray-600 hover:text-gray-900 flex items-center"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Back to Home
+              </Button>
+            </div>
+
+            {/* Mobile menu button */}
+            <div className="flex md:hidden">
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
+              >
+                <span className="sr-only">Open main menu</span>
+                {mobileMenuOpen ? (
+                  <X className="block h-6 w-6" />
+                ) : (
+                  <Menu className="block h-6 w-6" />
+                )}
+              </button>
+            </div>
+
+            {/* Desktop menu */}
+            <div className="hidden md:flex items-center gap-4">
               {showSidebar && (
                 <div className="md:hidden">
                   <Button 
@@ -293,6 +313,29 @@ export default function AnalysisPage() {
                   </Button>
                 </div>
               )}
+              <UserDropdown />
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile menu */}
+        <div className={`md:hidden ${mobileMenuOpen ? 'block' : 'hidden'}`}>
+          <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+            {showSidebar && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="w-full text-left bg-white hover:bg-gray-50" 
+                onClick={() => {
+                  toggleMobileSidebar();
+                  setMobileMenuOpen(false);
+                }}
+              >
+                <Menu className="h-5 w-5 mr-2" />
+                Toggle Sidebar
+              </Button>
+            )}
+            <div className="px-2">
               <UserDropdown />
             </div>
           </div>

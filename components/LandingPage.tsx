@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { Upload, FileSpreadsheet, ClipboardList, ArrowRight, FileText, FileSpreadsheet as ExcelIcon } from 'lucide-react';
+import { Upload, FileSpreadsheet, ClipboardList, ArrowRight, FileText, FileSpreadsheet as ExcelIcon, Menu, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import SurveyConverter from './SurveyConverter';
 import { useRouter } from 'next/navigation';
@@ -18,6 +18,7 @@ export default function LandingPage() {
   const surveyFileInputRef = useRef<HTMLInputElement>(null);
   const [surveyFile, setSurveyFile] = useState<File | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleUpgrade = async (plan: string) => {
     try {
@@ -73,7 +74,24 @@ export default function LandingPage() {
             <div className="flex items-center">
               <h1 className="text-xl font-bold text-gray-900">ProbePal</h1>
             </div>
-            <div className="flex items-center space-x-4">
+
+            {/* Mobile menu button */}
+            <div className="flex md:hidden">
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
+              >
+                <span className="sr-only">Open main menu</span>
+                {mobileMenuOpen ? (
+                  <X className="block h-6 w-6" />
+                ) : (
+                  <Menu className="block h-6 w-6" />
+                )}
+              </button>
+            </div>
+
+            {/* Desktop menu */}
+            <div className="hidden md:flex items-center space-x-4">
               <Button
                 variant="ghost"
                 onClick={() => router.push('/pricing')}
@@ -102,6 +120,50 @@ export default function LandingPage() {
                 </Button>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Mobile menu */}
+        <div className={`md:hidden ${mobileMenuOpen ? 'block' : 'hidden'}`}>
+          <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                router.push('/pricing');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full text-left text-gray-600 hover:text-blue-600"
+            >
+              Pricing
+            </Button>
+            {user && (!subscription || subscription?.plan_name === 'Free') && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  router.push('/pricing');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full text-left text-gray-600 hover:text-blue-600"
+              >
+                Upgrade
+              </Button>
+            )}
+            {user ? (
+              <div className="px-2">
+                <UserDropdown />
+              </div>
+            ) : (
+              <Button
+                onClick={() => {
+                  router.push('/auth');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Sign Up
+              </Button>
+            )}
           </div>
         </div>
       </nav>
