@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 
+// Set a reasonable timeout for external API calls
+const AXIOS_TIMEOUT = 25000; // 25 seconds
+
+export const runtime = 'edge'; // Use Edge Runtime for better performance
+
 export async function POST(request: Request) {
   try {
     const { model, systemPrompt, messages, data } = await request.json();
@@ -16,9 +21,28 @@ export async function POST(request: Request) {
     }
   } catch (error: any) {
     console.error('API error:', error);
+    
+    // More specific error handling
+    if (error.code === 'ECONNABORTED') {
+      return NextResponse.json(
+        { error: 'Request timed out. Please try again.' },
+        { status: 504 }
+      );
+    }
+    
+    if (axios.isAxiosError(error) && !error.response) {
+      return NextResponse.json(
+        { error: 'Network error. Please check your connection.' },
+        { status: 503 }
+      );
+    }
+    
     return NextResponse.json(
-      { error: error.message || 'Failed to generate content' },
-      { status: 500 }
+      { 
+        error: error.message || 'Failed to generate content',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
+      { status: error.status || 500 }
     );
   }
 }
@@ -63,6 +87,9 @@ async function callGeminiAPI(systemPrompt: string, data?: any[]) {
             text: fullPrompt
           }]
         }]
+      },
+      {
+        timeout: AXIOS_TIMEOUT
       }
     );
 
@@ -89,8 +116,10 @@ async function callGeminiAPI(systemPrompt: string, data?: any[]) {
       return 'The AI model did not return a valid response. Please try again.';
     }
   } catch (error: any) {
-    console.error('Gemini API error:', error);
-    throw new Error(`Gemini API error: ${error.message}`);
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Request to Gemini API timed out');
+    }
+    throw error;
   }
 }
 
@@ -124,13 +153,16 @@ async function callOpenRouterAPI(model: string, messages: any, systemPrompt: str
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: AXIOS_TIMEOUT
       }
     );
 
     return response.data.choices[0].message.content;
   } catch (error: any) {
-    console.error('OpenRouter API error:', error);
-    throw new Error(`OpenRouter API error: ${error.message}`);
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Request to OpenRouter API timed out');
+    }
+    throw error;
   }
 }

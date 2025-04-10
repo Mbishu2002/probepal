@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/react';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { SubscriptionProvider } from '@/contexts/SubscriptionContext';
 
@@ -25,6 +26,7 @@ export default function RootLayout({
         <AuthProvider>
           <SubscriptionProvider>
             {children}
+            <Analytics />
           </SubscriptionProvider>
         </AuthProvider>
       </body>

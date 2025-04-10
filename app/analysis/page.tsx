@@ -218,30 +218,73 @@ export default function AnalysisPage() {
         throw new Error('Active file not found');
       }
 
-      // Call the generate API
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          systemPrompt,
-          data: activeFile.data,
-          analysisStyle
-        }),
-      });
+      // Set up AbortController for client-side timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 29000); // Client timeout just under 30s
 
-      if (!response.ok) {
-        throw new Error('Failed to generate analysis');
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: selectedModel,
+            systemPrompt,
+            data: activeFile.data,
+            analysisStyle
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to generate analysis');
+        }
+
+        if (!response.body) {
+          throw new Error('No response body');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let content = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          // Decode the chunk and process the SSE data
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.content) {
+                  content += data.content;
+                  // Update the UI immediately with partial content
+                  setGeneratedContent(content);
+                }
+                if (data.error) {
+                  throw new Error(data.error);
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e);
+              }
+            }
+          }
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const result = await response.json();
-      setGeneratedContent(result.content);
-      
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating analysis:', error);
-      alert('Failed to generate analysis. Please try again.');
+      if (error.name === 'AbortError') {
+        alert('The request took too long. Please try again.');
+      } else {
+        alert('Failed to generate analysis. Please try again.');
+      }
     } finally {
       setIsGenerating(false);
     }
