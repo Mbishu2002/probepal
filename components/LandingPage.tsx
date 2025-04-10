@@ -33,10 +33,6 @@ export default function LandingPage() {
   };
 
   const handleExcelUploadClick = () => {
-    if (!user) {
-      router.push('/auth');
-      return;
-    }
     excelFileInputRef.current?.click();
   };
 
@@ -47,6 +43,10 @@ export default function LandingPage() {
   const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!user) {
+        router.push('/auth');
+        return;
+      }
       // Create a URL for the file
       const fileUrl = URL.createObjectURL(file);
       // Navigate to analysis page with the file data
